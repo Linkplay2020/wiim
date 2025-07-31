@@ -1,0 +1,53 @@
+name: release
+run-name: Creating releases/${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version"
+        required: true
+        type: string
+
+jobs:
+  create_release:
+    name: Create release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/wiim
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update version
+        run: |
+          echo "__version__ = '${{ github.event.inputs.version }}'" > src/wiim/__version__.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.13
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      - name: Build package
+        run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+	    with:
+		  user: __token__
+		  password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Create release branch
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B releases/${{ github.event.inputs.version }}
+          git commit --allow-empty -am "Create version ${{ github.event.inputs.version }}"
+          git push --set-upstream origin releases/${{ github.event.inputs.version }}
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          generate_release_notes: true
+          target_commitish: releases/${{ github.event.inputs.version }}
+          make_latest: true
