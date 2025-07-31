@@ -35,14 +35,17 @@ class WiimHttpCommand(StrEnum):
     AUDIO_OUTPUT_HW_MODE_SET = "setAudioOutputHardwareMode:{}"
     AUDIO_OUTPUT_HW_MODE = "getNewAudioOutputHardwareMode"
 
+
 class SpeakerType(StrEnum):
     MAIN_SPEAKER = "0"
     SUB_SPEAKER = "1"
-    
+
+
 class ChannelType(StrEnum):
     STEREO = "0"
     LEFT_CHANNEL = "1"
     RIGHT_CHANNEL = "2"
+
 
 class EqualizerMode(StrEnum):
     NONE = "None"
@@ -208,7 +211,8 @@ class AudioOutputHwMode(IntFlag):
 
 
 CMD_TO_MODE_MAP: dict[int, AudioOutputHwMode] = {
-    member.cmd: member for member in AudioOutputHwMode  # type: ignore[attr-defined]
+    member.cmd: member # type: ignore[attr-defined]
+    for member in AudioOutputHwMode  # type: ignore[attr-defined]
 }
 
 

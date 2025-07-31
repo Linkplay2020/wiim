@@ -217,7 +217,9 @@ class WiimDevice:
                     try:
                         await self._notify_server.async_stop_server()
                     except Exception as e:
-                        self.logger.warning("Failed to stop previous notify server: %s", e)
+                        self.logger.warning(
+                            "Failed to stop previous notify server: %s", e
+                        )
                     self._notify_server = None
 
                 self._notify_server = AiohttpNotifyServer(
@@ -490,7 +492,9 @@ class WiimDevice:
                 try:
                     await self._notify_server.async_stop_server()
                     self._notify_server = None
-                    self.logger.info("Device %s: AiohttpNotifyServer stopped.", self.name)
+                    self.logger.info(
+                        "Device %s: AiohttpNotifyServer stopped.", self.name
+                    )
                 except Exception as err:
                     self.logger.warning(
                         "Device %s: Error stopping AiohttpNotifyServer: %s",
@@ -1002,7 +1006,7 @@ class WiimDevice:
                 action_name,
                 result,
             )
-            return result # type: ignore
+            return result  # type: ignore
         except UpnpError as err:
             self.logger.warning(
                 "Device %s: UPnP action %s.%s failed: %s",

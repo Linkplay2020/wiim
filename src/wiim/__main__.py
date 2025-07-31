@@ -158,9 +158,7 @@ async def main_cli():
             print(
                 f"  Status: {device.playing_status.value if device.playing_status else 'N/A'}"
             )
-            print(
-                f"  Volume: {device.volume}% {'(Muted)' if device.is_muted else ''}"
-            )
+            print(f"  Volume: {device.volume}% {'(Muted)' if device.is_muted else ''}")
 
             if device.current_track_info:
                 track_info = device.current_track_info
