@@ -25,6 +25,7 @@ class WiimHttpCommand(StrEnum):
     REBOOT = "StartRebootTime:1"
     PLAYER_STATUS = "getPlayerStatusEx"
     SWITCH_MODE = "setPlayerCmd:switchmode:{}"
+    PLAY = "setPlayerCmd:play:{}"
     MULTIROOM_LIST = "multiroom:getSlaveList"
     MULTIROOM_UNGROUP = "multiroom:Ungroup"
     MULTIROOM_LEAVEGROUP = "multiroom:LeaveGroup"

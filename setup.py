@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 if __name__ == "__main__":
     setup(
 		name="wiim",
-		version="0.0.4",
+		version="0.0.5",
 		author="Linkplay",
 		author_email="tao.jiang@linkplay.com",
 		description="A Python-based API interface for controlling and communicating with WiiM audio devices.",
