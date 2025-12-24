@@ -654,17 +654,17 @@ class WiimDevice:
                 self.current_track_info["title"] = meta.get("title", "Unknown Title")
                 self.current_track_info["artist"] = meta.get("artist", "Unknown Artist")
                 self.current_track_info["album"] = meta.get("album", "Unknown Album")
-                self.current_track_info["album_art_uri"] = self._make_absolute_url(
+                self.current_track_info["album_art_uri"] = self.make_absolute_url(
                     meta.get("albumArtURI")
                 )
                 self.current_track_info["uri"] = meta.get("res")
 
         if "CurrentTrackDuration" in event_data:
-            self.current_track_duration = self._parse_duration(
+            self.current_track_duration = self.parse_duration(
                 event_data["CurrentTrackDuration"]
             )
         if "RelativeTimePosition" in event_data:
-            self.current_position = self._parse_duration(
+            self.current_position = self.parse_duration(
                 event_data["RelativeTimePosition"]
             )
 
@@ -1413,7 +1413,63 @@ class WiimDevice:
         """Return the current track's album art URI."""
         return self.current_track_info.get("album_art_uri")
 
-    def _parse_duration(self, time_str: str | None) -> int:
+    @property
+    def manufacturer(self) -> str | None:
+        return self._manufacturer
+
+    @property
+    def model(self) -> str | None:
+        return self._model_name
+
+    @property
+    def presentation_url(self) -> str | None:
+        return self._presentation_url
+
+    @property
+    def supports_http_api(self) -> bool:
+        return self._http_api is not None
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def set_available(self, available: bool) -> None:
+        self._available = available
+
+    async def get_audio_output_hw_mode(self) -> str | None:
+        return await self._http_request(WiimHttpCommand.AUDIO_OUTPUT_HW_MODE)
+
+    async def play_preset(self, preset: int) -> None:
+        if not self.supports_http_api:
+            raise RuntimeError("HTTP API not supported")
+        await self._http_command_ok(WiimHttpCommand.PLAY_PRESET, str(preset))
+
+    async def ensure_subscriptions(self) -> None:
+        ok = await self._renew_subscriptions()
+        if not ok:
+            self._available = True
+            await self.async_init_services_and_subscribe()
+            await self._renew_subscriptions()
+
+    async def play_preset(self, preset: int) -> None:
+        if not self.supports_http_api:
+            raise RuntimeError("HTTP API not supported")
+        await self._http_command_ok(
+            WiimHttpCommand.PLAY_PRESET, str(preset)
+        )
+
+    async def play_url(self, url: str) -> None:
+        if not self.supports_http_api:
+            raise RuntimeError("HTTP API not supported")
+        await self._http_command_ok(
+            WiimHttpCommand.PLAY, url
+        )
+
+    @property
+    def album_art_url(self) -> str | None:
+        return self._album_art_url
+
+    def parse_duration(self, time_str: str | None) -> int:
         """Parse HH:MM:SS or HH:MM:SS.mmm duration string to seconds."""
         if not time_str:
             return 0
@@ -1443,7 +1499,7 @@ class WiimDevice:
         s = int(seconds % 60)
         return f"{h:02}:{m:02}:{s:02}"
 
-    def _make_absolute_url(self, relative_url: str | None) -> str | None:
+    def make_absolute_url(self, relative_url: str | None) -> str | None:
         """Convert a relative URL from UPnP metadata to an absolute one."""
         if not relative_url:
             return None
