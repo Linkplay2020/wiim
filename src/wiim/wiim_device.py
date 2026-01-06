@@ -769,15 +769,10 @@ class WiimDevice:
                     None,
                 )
                 if master_mute and master_mute.get("val") is not None:
-                    self.is_muted = master_mute.get("val") == "1" or master_mute.get(
-                        "val"
-                    )
+                    self.is_muted = master_mute.get("val") == "1"
                 elif mute_data[0].get("val") is not None:
-                    self.is_muted = mute_data[0].get("val") == "1" or mute_data[0].get(
-                        "val"
-                    )
+                    self.is_muted = mute_data[0].get("val") == "1"
             elif isinstance(mute_data, dict) and mute_data.get("val") is not None:
-                # self.is_muted = mute_data.get("val") == "1" or mute_data.get("val")
                 self.is_muted = mute_data.get("val") == "1"
 
         self._player_properties[PlayerAttribute.VOLUME] = str(self.volume)
