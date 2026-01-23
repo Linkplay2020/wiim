@@ -563,6 +563,9 @@ class WiimDevice:
         self.logger.debug(
             "Device %s: Internal RenderingControl event: %s", self.name, state_variables
         )
+
+        self._handle_rendering_control_event(service, state_variables=state_variables)
+
         if self.rendering_control_event_callback:
             try:
                 self.rendering_control_event_callback(service, list(state_variables))
@@ -573,44 +576,6 @@ class WiimDevice:
                     e,
                     exc_info=True,
                 )
-
-        temp_parsed_data = (
-            parse_last_change_event(str(state_variables[0].value), self.logger)
-            if state_variables and state_variables[0].name == "LastChange"
-            else {}
-        )
-        if "Volume" in temp_parsed_data:
-            vol_data = temp_parsed_data["Volume"]
-            if isinstance(vol_data, list) and vol_data:
-                master_vol = next(
-                    (
-                        ch_vol
-                        for ch_vol in vol_data
-                        if ch_vol.get("channel") == "Master"
-                    ),
-                    None,
-                )
-                if master_vol and master_vol.get("val") is not None:
-                    self.volume = int(master_vol.get("val"))
-            elif isinstance(vol_data, dict) and vol_data.get("val") is not None:
-                # self.volume = int(vol_data.get("val"))
-                val = vol_data.get("val")
-                self.volume = int(val) if val is not None else 0
-        if "Mute" in temp_parsed_data:
-            mute_data = temp_parsed_data["Mute"]
-            if isinstance(mute_data, list) and mute_data:
-                master_mute = next(
-                    (
-                        ch_mute
-                        for ch_mute in mute_data
-                        if ch_mute.get("channel") == "Master"
-                    ),
-                    None,
-                )
-                if master_mute and master_mute.get("val") is not None:
-                    self.is_muted = master_mute.get("val") == "1"
-            elif isinstance(mute_data, dict) and mute_data.get("val") is not None:
-                self.is_muted = mute_data.get("val") == "1"
 
     def _internal_handle_play_queue_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
