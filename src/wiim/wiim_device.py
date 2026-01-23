@@ -528,6 +528,15 @@ class WiimDevice:
         self.logger.debug(
             "Device %s: Internal AVTransport event: %s", self.name, state_variables
         )
+
+        event_data = (
+            parse_last_change_event(str(state_variables[0].value), self.logger)
+            if state_variables and state_variables[0].name == "LastChange"
+            else {}
+        )
+
+        self._update_state_from_av_transport_event_data(event_data)
+
         if self.av_transport_event_callback:
             try:
                 self.av_transport_event_callback(service, list(state_variables))
@@ -538,23 +547,6 @@ class WiimDevice:
                     e,
                     exc_info=True,
                 )
-
-        temp_parsed_data = (
-            parse_last_change_event(str(state_variables[0].value), self.logger)
-            if state_variables and state_variables[0].name == "LastChange"
-            else {}
-        )
-        if "TransportState" in temp_parsed_data:
-            state_map = {
-                "PLAYING": PlayingStatus.PLAYING,
-                "PAUSED_PLAYBACK": PlayingStatus.PAUSED,
-                "STOPPED": PlayingStatus.STOPPED,
-                "TRANSITIONING": PlayingStatus.LOADING,
-                "NO_MEDIA_PRESENT": PlayingStatus.STOPPED,
-            }
-            self.playing_status = state_map.get(
-                temp_parsed_data["TransportState"], self.playing_status
-            )
 
     def _internal_handle_rendering_control_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
