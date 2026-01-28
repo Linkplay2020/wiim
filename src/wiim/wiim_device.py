@@ -9,6 +9,7 @@ from datetime import timedelta
 import xml.etree.ElementTree as ET
 from html import unescape
 from contextlib import suppress
+import json
 
 from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
 from async_upnp_client.exceptions import UpnpError
@@ -16,12 +17,14 @@ from async_upnp_client.event_handler import UpnpEventHandler
 from async_upnp_client.aiohttp import AiohttpNotifyServer
 
 from .consts import (
+    CMD_TO_MODE_MAP,
     SDK_LOGGER,
     MANUFACTURER_WIIM,
     UPNP_AV_TRANSPORT_SERVICE_ID,
     UPNP_RENDERING_CONTROL_SERVICE_ID,
     UPNP_WIIM_PLAY_QUEUE_SERVICE_ID,
     DeviceAttribute,
+    PlayMediumToInputMode,
     PlayerAttribute,
     PlayingStatus,
     PlayerStatus,
@@ -126,45 +129,6 @@ class WiimDevice:
             self.requester_for_eventing = self.upnp_device.requester  # type: ignore
 
         self.ha_host_ip = ha_host_ip
-        # if requester_for_eventing:
-        #     try:
-        #         loop = asyncio.get_event_loop()
-        #         local_ip = ha_host_ip
-        #         device_ip = self.ip_address
-        #         if device_ip:
-        #             last_octet = int(device_ip.split(".")[-1])
-        #         else:
-        #             last_octet = 0
-        #         base_port = 50000
-        #         assigned_port = base_port + last_octet
-        #         source_ip = local_ip or "0.0.0.0"
-        #         source = (source_ip, assigned_port)
-
-        #         self._notify_server = AiohttpNotifyServer(
-        #             requester=requester_for_eventing,
-        #             source=source,
-        #             loop=loop,
-        #         )
-
-        #         self.logger.debug(
-        #             "Device %s: UpnpEventHandler and AiohttpNotifyServer initialized.",
-        #             self.name,
-        #         )
-        #     except Exception as e:
-        #         self.logger.warning(
-        #             "Device %s: Failed to initialize AiohttpNotifyServer or UpnpEventHandler: %s. Eventing will be disabled.",
-        #             self.name,
-        #             e,
-        #             exc_info=True,
-        #         )
-        #         self._notify_server = None
-        #         self._event_handler = None
-        # else:
-        #     self.logger.warning(
-        #         "Device %s: UpnpDevice has no valid requester. Eventing will not be available.",
-        #         self.name,
-        #     )
-
         self.volume: int = 0
         self.is_muted: bool = False
         self.playing_status: PlayingStatus = PlayingStatus.STOPPED
@@ -176,6 +140,11 @@ class WiimDevice:
         self.current_position: int = 0
         self.current_track_duration: int = 0
         self.next_track_uri: str | None = None
+        self.output_mode: str | None = None
+        self.input_mode: InputMode = InputMode.WIFI
+        self.slave_action: str | None = None
+        self.slave_udn: str | None = None
+        self.event_data: dict[str, Any] = {}
 
         self._http_api: WiimApiEndpoint | None = http_api_endpoint
 
@@ -528,8 +497,32 @@ class WiimDevice:
         self.logger.debug(
             "Device %s: Internal AVTransport event: %s", self.name, state_variables
         )
+
+        last_change_sv = next(
+            (sv for sv in state_variables if sv.name == "LastChange"), None
+        )
+        if not last_change_sv or last_change_sv.value is None:
+            SDK_LOGGER.debug(
+                "Device: No LastChange in PlayQueue event or value is None."
+            )
+            return
+
+        try:
+            event_data = parse_last_change_event(str(last_change_sv.value), SDK_LOGGER)
+        except Exception as e:
+            SDK_LOGGER.error(
+                "Device %s: Error parsing PlayQueue LastChange event: %s. Data: %s",
+                e,
+                last_change_sv.value,
+                exc_info=True,
+            )
+            raise
+
+        self._update_state_from_av_transport_event_data(event_data)
+
         if self.av_transport_event_callback:
             try:
+                self.event_data = event_data
                 self.av_transport_event_callback(service, list(state_variables))
             except Exception as e:
                 self.logger.warning(
@@ -539,23 +532,6 @@ class WiimDevice:
                     exc_info=True,
                 )
 
-        temp_parsed_data = (
-            parse_last_change_event(str(state_variables[0].value), self.logger)
-            if state_variables and state_variables[0].name == "LastChange"
-            else {}
-        )
-        if "TransportState" in temp_parsed_data:
-            state_map = {
-                "PLAYING": PlayingStatus.PLAYING,
-                "PAUSED_PLAYBACK": PlayingStatus.PAUSED,
-                "STOPPED": PlayingStatus.STOPPED,
-                "TRANSITIONING": PlayingStatus.LOADING,
-                "NO_MEDIA_PRESENT": PlayingStatus.STOPPED,
-            }
-            self.playing_status = state_map.get(
-                temp_parsed_data["TransportState"], self.playing_status
-            )
-
     def _internal_handle_rendering_control_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
     ) -> None:
@@ -563,54 +539,141 @@ class WiimDevice:
         self.logger.debug(
             "Device %s: Internal RenderingControl event: %s", self.name, state_variables
         )
-        if self.rendering_control_event_callback:
-            try:
-                self.rendering_control_event_callback(service, list(state_variables))
-            except Exception as e:
-                self.logger.warning(
-                    "Device %s: Error in HA-provided rendering_control_event_callback: %s",
-                    self.name,
-                    e,
-                    exc_info=True,
-                )
 
-        temp_parsed_data = (
-            parse_last_change_event(str(state_variables[0].value), self.logger)
-            if state_variables and state_variables[0].name == "LastChange"
-            else {}
+        last_change_sv = next(
+            (sv for sv in state_variables if sv.name == "LastChange"), None
         )
-        if "Volume" in temp_parsed_data:
-            vol_data = temp_parsed_data["Volume"]
-            if isinstance(vol_data, list) and vol_data:
-                master_vol = next(
-                    (
-                        ch_vol
-                        for ch_vol in vol_data
-                        if ch_vol.get("channel") == "Master"
-                    ),
-                    None,
+        if not last_change_sv or last_change_sv.value is None:
+            SDK_LOGGER.debug(
+                "Device: No LastChange in PlayQueue event or value is None."
+            )
+            return
+
+        try:
+            event_data = parse_last_change_event(str(last_change_sv.value), SDK_LOGGER)
+        except Exception as e:
+            SDK_LOGGER.error(
+                "Device: Error parsing PlayQueue LastChange event: %s. Data: %s",
+                e,
+                last_change_sv.value,
+                exc_info=True,
+            )
+            raise
+
+        try:
+            if not any(key in event_data for key in ("Volume", "Mute", "commonevent")):
+                last_change_sv = next(
+                    (sv for sv in state_variables if sv.name == "LastChange"), None
                 )
-                if master_vol and master_vol.get("val") is not None:
-                    self.volume = int(master_vol.get("val"))
-            elif isinstance(vol_data, dict) and vol_data.get("val") is not None:
-                # self.volume = int(vol_data.get("val"))
-                val = vol_data.get("val")
-                self.volume = int(val) if val is not None else 0
-        if "Mute" in temp_parsed_data:
-            mute_data = temp_parsed_data["Mute"]
-            if isinstance(mute_data, list) and mute_data:
-                master_mute = next(
-                    (
-                        ch_mute
-                        for ch_mute in mute_data
-                        if ch_mute.get("channel") == "Master"
-                    ),
-                    None,
-                )
-                if master_mute and master_mute.get("val") is not None:
-                    self.is_muted = master_mute.get("val") == "1"
-            elif isinstance(mute_data, dict) and mute_data.get("val") is not None:
-                self.is_muted = mute_data.get("val") == "1"
+                if last_change_sv is not None:
+                    self._async_process_rendering_control_event(
+                        str(last_change_sv.value)
+                    )
+                return
+
+            # Update _device's internal state
+            if "Volume" in event_data:
+                vol_data = event_data["Volume"]
+                master_volume_val = None
+                if isinstance(vol_data, list):
+                    master_channel_vol = next(
+                        (
+                            ch_vol
+                            for ch_vol in vol_data
+                            if ch_vol.get("channel") == "Master"
+                        ),
+                        None,
+                    )
+                    if master_channel_vol:
+                        master_volume_val = master_channel_vol.get("val")
+                elif isinstance(vol_data, dict):
+                    master_volume_val = vol_data.get("val")
+
+                if master_volume_val is not None:
+                    try:
+                        self.volume = int(master_volume_val)
+                    except ValueError:
+                        SDK_LOGGER.warning(
+                            "Device: Invalid volume value from event: %s",
+                            master_volume_val,
+                        )
+
+            if "Mute" in event_data:
+                mute_data = event_data["Mute"]
+                master_mute_val = None
+                if isinstance(mute_data, list):
+                    master_channel_mute = next(
+                        (
+                            ch_mute
+                            for ch_mute in mute_data
+                            if ch_mute.get("channel") == "Master"
+                        ),
+                        None,
+                    )
+                    if master_channel_mute:
+                        master_mute_val = master_channel_mute.get("val")
+                elif isinstance(mute_data, dict):
+                    master_mute_val = mute_data.get("val")
+
+                if master_mute_val is not None:
+                    new_mute_state = (
+                        str(master_mute_val) == "1" or master_mute_val is True
+                    )
+                    self.is_muted = new_mute_state
+
+            commonevent_str = event_data.get("commonevent")
+            if not commonevent_str:
+                return
+
+            try:
+                commonevent = json.loads(commonevent_str)
+                category = commonevent.get("category")
+                body = commonevent.get("body", {})
+
+                if category == "bluetooth":
+                    connected = body.get("connected")
+                    if connected == 1:
+                        self.output_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
+
+                elif category == "hardware":
+                    output_mode_val = body.get("output_mode")
+                    if output_mode_val is not None:
+                        try:
+                            if (
+                                self._udn
+                                and any(key in self._udn for key in AUDIO_AUX_MODE_IDS)
+                                and output_mode_val == "AUDIO_OUTPUT_AUX_MODE"
+                            ):
+                                self.output_mode = (
+                                    AudioOutputHwMode.SPEAKER_OUT.display_name  # type: ignore[attr-defined]
+                                )
+                            else:
+                                self.output_mode = self.get_display_name_by_command_str(
+                                    output_mode_val
+                                )
+
+                        except ValueError:
+                            SDK_LOGGER.warning(
+                                "Device: Unknown AudioOutputHwMode value received in hardware event: %s",
+                                output_mode_val,
+                            )
+
+            except json.JSONDecodeError as e:
+                SDK_LOGGER.debug(f"Failed to parse commonevent JSON: {e}")
+
+        finally:
+            if self.rendering_control_event_callback:
+                try:
+                    self.rendering_control_event_callback(
+                        service, list(state_variables)
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        "Device %s: Error in HA-provided rendering_control_event_callback: %s",
+                        self.name,
+                        e,
+                        exc_info=True,
+                    )
 
     def _internal_handle_play_queue_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
@@ -619,6 +682,48 @@ class WiimDevice:
         self.logger.debug(
             "Device %s: Internal PlayQueue event: %s", self.name, state_variables
         )
+
+        last_change_sv = next(
+            (sv for sv in state_variables if sv.name == "LastChange"), None
+        )
+        if not last_change_sv or last_change_sv.value is None:
+            SDK_LOGGER.debug(
+                "Device: No LastChange in PlayQueue event or value is None."
+            )
+            return
+
+        try:
+            event_data = parse_last_change_event(str(last_change_sv.value), SDK_LOGGER)
+        except Exception as e:
+            SDK_LOGGER.error(
+                "Device: Error parsing PlayQueue LastChange event: %s. Data: %s",
+                e,
+                last_change_sv.value,
+                exc_info=True,
+            )
+            raise
+
+        # Update _device's internal state
+        if "LoopMode" in event_data:  # Corrected from LoopMode
+            loop_mode_val = event_data["LoopMode"]
+            try:
+                self.loop_mode = LoopMode(loop_mode_val)
+            except ValueError:
+                SDK_LOGGER.warning(
+                    "Device: Invalid loopmode value (not an integer) from PlayQueue event: %s",
+                    loop_mode_val,
+                )
+
+        if "LoopMpde" in event_data:  # Corrected from LoopMpde
+            loop_mode_val = event_data["LoopMpde"]
+            try:
+                self.loop_mode = LoopMode(loop_mode_val)
+            except ValueError:
+                SDK_LOGGER.warning(
+                    "Device: Invalid loopmode value (not an integer) from PlayQueue event: %s",
+                    loop_mode_val,
+                )
+
         if self.play_queue_event_callback:
             try:
                 self.play_queue_event_callback(service, list(state_variables))
@@ -629,6 +734,42 @@ class WiimDevice:
                     e,
                     exc_info=True,
                 )
+
+    def get_display_name_by_command_str(self, command_str: str) -> str | None:
+        """Helper to get display name from command string for AudioOutputHwMode."""
+        for mode in AudioOutputHwMode:
+            if hasattr(mode, "command_str") and mode.command_str == command_str:
+                return mode.display_name  # type: ignore[attr-defined]
+        return AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
+
+    def _async_process_rendering_control_event(self, last_change_sv: str) -> None:
+        # New: Handle Slave action="add" and Slave action="del" events
+        raw_xml_value = last_change_sv
+        try:
+            root = ET.fromstring(raw_xml_value)
+            rcs_ns = {"rcs": "urn:schemas-upnp-org:metadata-1-0/RCS/"}
+            instance_id_elem = root.find(".//rcs:InstanceID", namespaces=rcs_ns)
+
+            if instance_id_elem:
+                slave_elements = instance_id_elem.findall(
+                    ".//rcs:Slave", namespaces=rcs_ns
+                )
+                for slave_elem in slave_elements:
+                    action = slave_elem.get("action")
+                    slave_udn = slave_elem.get("val")
+
+                    self.slave_action = action
+                    self.slave_udn = slave_udn
+        except ET.ParseError as xml_e:
+            SDK_LOGGER.warning(
+                f"Device: Failed to parse XML for Slave action in RenderingControl event: {xml_e}"
+            )
+        except Exception as general_e:
+            SDK_LOGGER.error(
+                f"Device: Unexpected error processing Slave action in RenderingControl event: {general_e}",
+                exc_info=True,
+            )
+            raise
 
     def _update_state_from_av_transport_event_data(self, event_data: Dict[str, Any]):
         """(Primarily for HTTP cache) Update device state based on parsed AVTransport event data."""
@@ -648,155 +789,131 @@ class WiimDevice:
                 self.playing_status.value
             )
 
-        if "CurrentTrackMetaData" in event_data:
-            meta = event_data["CurrentTrackMetaData"]
-            if isinstance(meta, dict):
-                self.current_track_info["title"] = meta.get("title", "Unknown Title")
-                self.current_track_info["artist"] = meta.get("artist", "Unknown Artist")
-                self.current_track_info["album"] = meta.get("album", "Unknown Album")
-                self.current_track_info["album_art_uri"] = self.make_absolute_url(
-                    meta.get("albumArtURI")
-                )
-                self.current_track_info["uri"] = meta.get("res")
-
         if "CurrentTrackDuration" in event_data:
-            self.current_track_duration = self.parse_duration(
-                event_data["CurrentTrackDuration"]
-            )
+            duration = self.parse_duration(event_data["CurrentTrackDuration"])
+            self.current_track_duration = duration
+
         if "RelativeTimePosition" in event_data:
-            self.current_position = self.parse_duration(
-                event_data["RelativeTimePosition"]
-            )
+            position = self.parse_duration(event_data["RelativeTimePosition"])
+            position = max(position, 0)
+            self.current_position = position
 
-        if "NextAVTransportURI" in event_data and event_data[
-            "NextAVTransportURI"
-        ] not in [None, "NOT_IMPLEMENTED", ""]:
-            self.next_track_uri = event_data["NextAVTransportURI"]
-        else:
-            self.next_track_uri = None
+        if "A_ARG_TYPE_SeekTarget" in event_data:
+            position_str = event_data["A_ARG_TYPE_SeekTarget"]
+            SDK_LOGGER.debug(f"Device: Using A_ARG_TYPE_SeekTarget: {position_str}")
 
-        self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
-            self.playing_status.value
-        )
-        self._player_properties[PlayerAttribute.TITLE] = self.current_track_info.get(
-            "title", ""
-        )
-        self._player_properties[PlayerAttribute.ARTIST] = self.current_track_info.get(
-            "artist", ""
-        )
-        self._player_properties[PlayerAttribute.ALBUM] = self.current_track_info.get(
-            "album", ""
-        )
-        self._player_properties[PlayerAttribute.TOTAL_LENGTH] = str(
-            self.current_track_duration * 1000
-        )
-        self._player_properties[PlayerAttribute.CURRENT_POSITION] = str(
-            self.current_position * 1000
-        )
-
-        self.logger.debug(
-            "Device %s: Updated AVTransport state: Status=%s, Track=%s",
-            self.name,
-            self.playing_status,
-            self.current_track_info.get("title"),
-        )
-
-    def _handle_rendering_control_event(
-        self, service: UpnpService, state_variables: List[UpnpStateVariable]
-    ) -> None:
-        """Handle state variable changes for RenderingControl."""
-        self.logger.debug(
-            "Device %s: RenderingControl event: %s", self.name, state_variables
-        )
-        changed_vars = {
-            sv.name: sv.value for sv in state_variables if sv.name == "LastChange"
-        }
-        if "LastChange" in changed_vars and changed_vars["LastChange"] is not None:
-            event_data = parse_last_change_event(
-                str(changed_vars["LastChange"]), self.logger
-            )
-            self._update_state_from_rendering_control_event_data(event_data)
-
-    def _update_state_from_rendering_control_event_data(
-        self, event_data: Dict[str, Any]
-    ):
-        """Update device state based on parsed RenderingControl event data."""
-        if "Volume" in event_data:
-            vol_data = event_data["Volume"]
-            if isinstance(vol_data, list) and vol_data:
-                master_vol = next(
-                    (
-                        ch_vol
-                        for ch_vol in vol_data
-                        if ch_vol.get("channel") == "Master"
-                    ),
-                    None,
-                )
-                if master_vol and master_vol.get("val") is not None:
-                    try:
-                        self.volume = int(master_vol.get("val"))
-                    except ValueError:
-                        self.logger.warning(
-                            "Invalid volume value from event: %s", master_vol.get("val")
-                        )
-                elif vol_data[0].get("val") is not None:
-                    try:
-                        self.volume = int(vol_data[0].get("val"))
-                    except ValueError:
-                        self.logger.warning(
-                            "Invalid volume value from event: %s",
-                            vol_data[0].get("val"),
-                        )
-            elif isinstance(vol_data, dict) and vol_data.get("val") is not None:
+            if position_str:
                 try:
-                    # self.volume = int(vol_data.get("val"))
-                    val = vol_data.get("val")
-                    self.volume = int(val) if val is not None else 0
+                    position = self.parse_duration(position_str)
+                    self.current_position = position
+                    SDK_LOGGER.debug(
+                        f"Device: Updated media position to {position} seconds."
+                    )
                 except ValueError:
-                    self.logger.warning(
-                        "Invalid volume value from event: %s", vol_data.get("val")
+                    SDK_LOGGER.warning(
+                        f"Device: Could not parse position string '{position_str}'."
                     )
 
-        if "Mute" in event_data:
-            mute_data = event_data["Mute"]
-            if isinstance(mute_data, list) and mute_data:
-                master_mute = next(
-                    (
-                        ch_mute
-                        for ch_mute in mute_data
-                        if ch_mute.get("channel") == "Master"
+        if "PlaybackStorageMedium" in event_data:
+            playMedium = PlayMediumToInputMode.get(
+                event_data["PlaybackStorageMedium"], 1
+            )
+            new_mode = InputMode(playMedium)  # type: ignore[call-arg]
+            self.play_mode = new_mode.display_name  # type: ignore[attr-defined]
+
+        # Prioritize AVTransportURIMetaData for media metadata if available, otherwise fallback to CurrentTrackMetaData
+        media_metadata_key = None
+        if event_data.get("AVTransportURIMetaData"):
+            media_metadata_key = "AVTransportURIMetaData"
+        elif event_data.get("CurrentTrackMetaData"):
+            media_metadata_key = "CurrentTrackMetaData"
+
+        if media_metadata_key:
+            try:
+                meta = event_data[media_metadata_key]
+                if isinstance(meta, str):
+                    SDK_LOGGER.warning(
+                        "Device: %s is raw XML in event, not parsed by SDK. Attempting to parse.",
+                        media_metadata_key,
+                    )
+                    try:
+                        root = ET.fromstring(unescape(meta))
+                        didl_ns = {
+                            "didl": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
+                            "dc": "http://purl.org/dc/elements/1.1/",
+                            "upnp": "urn:schemas-upnp-org:metadata-1-0/upnp/",
+                        }
+                        item_elem = root.find("didl:item", namespaces=didl_ns)
+                        if item_elem is not None:
+                            res_elem = item_elem.find("res", namespaces=didl_ns)
+                        else:
+                            res_elem = None
+
+                        duration_str = (
+                            res_elem.get("duration", "") if res_elem is not None else ""
+                        )
+                        try:
+                            duration = int(duration_str) if duration_str else 0
+                        except ValueError:
+                            duration = 0
+
+                        if item_elem:
+                            meta = {
+                                "title": item_elem.findtext(
+                                    "dc:title", default="", namespaces=didl_ns
+                                ),
+                                "artist": item_elem.findtext(
+                                    "upnp:artist", default="", namespaces=didl_ns
+                                ),
+                                "album": item_elem.findtext(
+                                    "upnp:album", default="", namespaces=didl_ns
+                                ),
+                                "albumArtURI": item_elem.findtext(
+                                    "upnp:albumArtURI", default="", namespaces=didl_ns
+                                ),
+                                "res": item_elem.findtext(
+                                    "res", default="", namespaces=didl_ns
+                                ),
+                                "duration": duration,
+                            }
+                        else:
+                            SDK_LOGGER.warning(
+                                "Device: No 'item' element found in parsed %s XML.",
+                                media_metadata_key,
+                            )
+                            meta = {}
+                    except ET.ParseError as xml_e:
+                        SDK_LOGGER.error(
+                            "Device: Failed to parse XML from %s: %s",
+                            media_metadata_key,
+                            xml_e,
+                        )
+                        meta = {}
+
+                # Update the device's internal current_track_info dictionary
+                self.current_track_info = {
+                    "title": meta.get("title"),
+                    "artist": meta.get("artist"),
+                    "album": meta.get("album"),
+                    "uri": meta.get("res"),
+                    "duration": (
+                        self.parse_duration(meta.get("duration"))  # noqa: SLF001
+                        if meta.get("duration")
+                        else None
                     ),
-                    None,
+                    "albumArtURI": self.make_absolute_url(  # noqa: SLF001
+                        meta.get("albumArtURI")
+                    ),
+                }
+
+            except Exception as e:
+                SDK_LOGGER.error(
+                    "Device: Error processing metadata from %s AVTransport event: %s",
+                    media_metadata_key,
+                    e,
+                    exc_info=True,
                 )
-                if master_mute and master_mute.get("val") is not None:
-                    self.is_muted = master_mute.get("val") == "1" or master_mute.get(
-                        "val"
-                    )
-                elif mute_data[0].get("val") is not None:
-                    self.is_muted = mute_data[0].get("val") == "1" or mute_data[0].get(
-                        "val"
-                    )
-            elif isinstance(mute_data, dict) and mute_data.get("val") is not None:
-                # self.is_muted = mute_data.get("val") == "1" or mute_data.get("val")
-                self.is_muted = mute_data.get("val") == "1"
-
-        self._player_properties[PlayerAttribute.VOLUME] = str(self.volume)
-        self._player_properties[PlayerAttribute.MUTED] = (
-            MuteMode.MUTED if self.is_muted else MuteMode.UNMUTED
-        )
-
-        self.logger.debug(
-            "Device %s: Updated RenderingControl state: Volume=%s, Muted=%s",
-            self.name,
-            self.volume,
-            self.is_muted,
-        )
-
-    def _handle_play_queue_event(
-        self, service: UpnpService, state_variables: List[UpnpStateVariable]
-    ) -> None:
-        """Handle state variable changes for the custom PlayQueue service."""
-        self.logger.debug("Device %s: PlayQueue event: %s", self.name, state_variables)
+                raise
 
     async def _http_request(
         self, command: WiimHttpCommand | str, params: str | None = None
@@ -885,16 +1002,6 @@ class WiimDevice:
                     http_playing_status = _PLAYER_TO_PLAYING.get(
                         ps, PlayingStatus.UNKNOWN
                     )
-                    # http_playing_status = PlayingStatus(http_playing_status_str)
-                    # if self.playing_status in [
-                    #     PlayingStatus.STOPPED,
-                    #     PlayingStatus.LOADING,
-                    #     None,
-                    # ] or (
-                    #     http_playing_status == PlayingStatus.STOPPED
-                    #     and self.playing_status != PlayingStatus.STOPPED
-                    # ):
-                    #     self.playing_status = http_playing_status
                     if self.playing_status != http_playing_status:
                         self.playing_status = http_playing_status
                 except ValueError:
@@ -1145,6 +1252,7 @@ class WiimDevice:
                 await self._http_command_ok(
                     WiimHttpCommand.AUDIO_OUTPUT_HW_MODE_SET, http_mode_val
                 )
+                self.output_mode = output_mode
             except WiimRequestException as e:
                 self.logger.warning(
                     "Device %s: Failed to set output mode to %s via HTTP: %s",
@@ -1191,12 +1299,6 @@ class WiimDevice:
         """Set equalizer mode using HTTP API."""
         if self._manufacturer == MANUFACTURER_WIIM and self._http_api:
             try:
-                # if eq_mode == EqualizerMode.NONE:
-                #     await self._http_command_ok(WiimHttpCommand.WIIM_EQUALIZER_OFF)
-                # else:
-                #     await self._http_command_ok(
-                #         WiimHttpCommand.WIIM_EQ_LOAD, eq_mode.value
-                #     )
                 self.equalizer_mode = eq_mode
                 self._custom_player_properties[PlayerAttribute.EQUALIZER_MODE] = (
                     eq_mode.value
@@ -1429,20 +1531,91 @@ class WiimDevice:
     def supports_http_api(self) -> bool:
         return self._http_api is not None
 
-    @property
-    def available(self) -> bool:
-        return self._available
-
     def set_available(self, available: bool) -> None:
         self._available = available
 
     async def get_audio_output_hw_mode(self) -> str | None:
-        return await self._http_request(WiimHttpCommand.AUDIO_OUTPUT_HW_MODE)
+        response = await self._http_request(WiimHttpCommand.AUDIO_OUTPUT_HW_MODE)
 
-    async def play_preset(self, preset: int) -> None:
-        if not self.supports_http_api:
-            raise RuntimeError("HTTP API not supported")
-        await self._http_command_ok(WiimHttpCommand.PLAY_PRESET, str(preset))
+        hardware_output_mode: dict[str, Any] = {}
+        if isinstance(response, dict):
+            hardware_output_mode = response
+        elif isinstance(response, str):
+            try:
+                hardware_output_mode = json.loads(response)
+            except ValueError:
+                SDK_LOGGER.warning(
+                    "Device %s: Failed to parse output mode JSON: %s",
+                    self.entity_id,
+                    response,
+                )
+                return
+
+        hardware = hardware_output_mode.get("hardware")
+        if hardware is None:
+            output_mode = 0
+        else:
+            output_mode = int(hardware)
+        source = hardware_output_mode.get("source")
+        if source is None:
+            source_mode = 0
+        else:
+            source_mode = int(source)
+        if source_mode == 1:
+            self.sound_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
+        elif (
+            self._udn
+            and any(key in self._udn for key in AUDIO_AUX_MODE_IDS)
+            and output_mode == 2
+        ):
+            self.sound_mode = AudioOutputHwMode.SPEAKER_OUT.display_name  # type: ignore[attr-defined]
+        else:
+
+            def get_output_mode_display_name_by_cmd(
+                cmd: int,
+            ) -> str:
+                mode = CMD_TO_MODE_MAP.get(cmd)
+                if mode:
+                    return mode.display_name  # type: ignore[attr-defined]
+                return AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
+
+            try:
+                self.sound_mode = get_output_mode_display_name_by_cmd(output_mode)
+            except ValueError:
+                self.sound_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
+                SDK_LOGGER.debug("Output mode is out range.")
+
+        self.output_mode = self.sound_mode
+
+        return self.sound_mode
+
+    async def sync_device_duration_and_position(self) -> None:
+        try:
+            # Call GetPositionInfo directly on the AVTransport service
+            position_response = await self.async_set_AVT_cmd(
+                WiimHttpCommand.POSITION_INFO
+            )
+            position_str = position_response.get("RelTime")
+            duration_str = position_response.get("TrackDuration")
+            if position_str:
+                position = self.parse_duration(position_str)
+                position = max(position, 0)
+                duration = self.parse_duration(duration_str)
+                self.current_position = position
+                self.current_track_duration = duration
+
+                SDK_LOGGER.debug(
+                    f"Device: Fetched position {position} and duration {duration} from GetPositionInfo after play command."
+                )
+            else:
+                SDK_LOGGER.debug(
+                    "Device: No RelTime in GetPositionInfo response after play command."
+                )
+        except Exception as e:
+            SDK_LOGGER.warning(
+                f"Device: Failed to get position info from GetPositionInfo after play: {e}"
+            )
+            raise
 
     async def ensure_subscriptions(self) -> None:
         ok = await self._renew_subscriptions()
@@ -1454,20 +1627,12 @@ class WiimDevice:
     async def play_preset(self, preset: int) -> None:
         if not self.supports_http_api:
             raise RuntimeError("HTTP API not supported")
-        await self._http_command_ok(
-            WiimHttpCommand.PLAY_PRESET, str(preset)
-        )
+        await self._http_command_ok(WiimHttpCommand.PLAY_PRESET, str(preset))
 
     async def play_url(self, url: str) -> None:
         if not self.supports_http_api:
             raise RuntimeError("HTTP API not supported")
-        await self._http_command_ok(
-            WiimHttpCommand.PLAY, url
-        )
-
-    @property
-    def album_art_url(self) -> str | None:
-        return self._album_art_url
+        await self._http_command_ok(WiimHttpCommand.PLAY, url)
 
     def parse_duration(self, time_str: str | None) -> int:
         """Parse HH:MM:SS or HH:MM:SS.mmm duration string to seconds."""
