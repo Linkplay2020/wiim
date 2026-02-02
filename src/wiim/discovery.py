@@ -50,7 +50,8 @@ async def verify_wiim_device(
 
         if (
             device.manufacturer
-            and MANUFACTURER_WIIM.lower() in device.manufacturer.lower()
+            and (MANUFACTURER_WIIM.lower() in device.manufacturer.lower()) or
+            (device.manufacturer == "Audio Pro AB" and device.model_name and device.model_name == "A10 Speaker")
         ):
             logger.info(
                 "Verified WiiM device by manufacturer: %s (%s)",

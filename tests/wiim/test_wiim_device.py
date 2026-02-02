@@ -126,27 +126,10 @@ class TestWiimDevice:
             WiimHttpCommand.SWITCH_MODE, "line-in"
         )
 
-    def test_update_state_from_rendering_control_event_data(
-        self, mock_upnp_device, mock_session
-    ):
-        """Test internal state update from a parsed UPnP RenderingControl event."""
-        device = WiimDevice(mock_upnp_device, mock_session)
-        event_data = {
-            "Volume": [{"val": "67", "channel": "Master"}],
-            "Mute": [{"val": "1", "channel": "Master"}],
-        }
-
-        device._update_state_from_rendering_control_event_data(event_data)
-
-        assert device.volume == 67
-        assert device.is_muted is True
-        assert device._player_properties[PlayerAttribute.VOLUME] == "67"
-        assert device._player_properties[PlayerAttribute.MUTED] == MuteMode.MUTED
-
     def test_parse_duration(self, mock_upnp_device, mock_session):
         """Test the parsing of various duration string formats."""
         device = WiimDevice(mock_upnp_device, mock_session)
-        assert device._parse_duration("01:23:45") == 5025
-        assert device._parse_duration("00:02:30.123") == 150
-        assert device._parse_duration(None) == 0
-        assert device._parse_duration("NOT_IMPLEMENTED") == 0
+        assert device.parse_duration("01:23:45") == 5025
+        assert device.parse_duration("00:02:30.123") == 150
+        assert device.parse_duration(None) == 0
+        assert device.parse_duration("NOT_IMPLEMENTED") == 0

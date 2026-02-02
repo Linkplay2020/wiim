@@ -20,11 +20,11 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Update version
         run: |
           echo "__version__ = '${{ github.event.inputs.version }}'" > src/wiim/__version__.py
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: 3.13
       - name: Install dependencies
