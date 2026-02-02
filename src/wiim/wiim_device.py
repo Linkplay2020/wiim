@@ -133,6 +133,7 @@ class WiimDevice:
         self.is_muted: bool = False
         self.playing_status: PlayingStatus = PlayingStatus.STOPPED
         self.current_track_info: dict[str, Any] = {}
+        self.current_track_uri: str | None = None
         self.play_mode: str
         self.input_source: str
         self.loop_mode: LoopMode = LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
@@ -788,6 +789,11 @@ class WiimDevice:
             self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
                 self.playing_status.value
             )
+        
+        if "CurrentTrackURI" in event_data:
+            self.current_track_uri = event_data["CurrentTrackURI"]
+        else:
+            self.current_track_uri = None
 
         if "CurrentTrackDuration" in event_data:
             duration = self.parse_duration(event_data["CurrentTrackDuration"])
