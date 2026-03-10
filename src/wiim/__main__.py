@@ -10,6 +10,7 @@ from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf, Zeroconf
 from .consts import SDK_LOGGER
 from .controller import WiimController
 from .discovery import async_create_wiim_device
+from .exceptions import WiimDeviceException, WiimRequestException
 
 
 class ZeroconfListener:
@@ -98,14 +99,17 @@ async def main_cli():
 
             wiim_device = None
             for location in potential_locations:
-                wiim_device = await async_create_wiim_device(
-                    location,
-                    session,
-                    host=wiim_device_ip,
-                )
-                if wiim_device:
-                    SDK_LOGGER.info(f"Successfully verified WiiM device at {location}")
-                    break
+                try:
+                    wiim_device = await async_create_wiim_device(
+                        location,
+                        session,
+                        host=wiim_device_ip,
+                    )
+                except (WiimDeviceException, WiimRequestException):
+                    continue
+
+                SDK_LOGGER.info(f"Successfully verified WiiM device at {location}")
+                break
 
             if not wiim_device:
                 SDK_LOGGER.warning(

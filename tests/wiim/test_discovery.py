@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 from async_upnp_client.exceptions import UpnpConnectionError
+from wiim.exceptions import WiimDeviceException, WiimRequestException
 from wiim.discovery import (
     async_create_wiim_device,
     async_probe_wiim_device,
@@ -115,7 +116,7 @@ class TestDiscovery:
         device = await async_create_wiim_device(
             "http://192.168.1.10:49152/description.xml",
             mock_session,
-            ha_host_ip="192.168.1.2",
+            local_host="192.168.1.2",
         )
 
         assert device is mock_wiim_device
@@ -131,7 +132,7 @@ class TestDiscovery:
             mock_upnp_device,
             mock_session,
             http_api_endpoint=mock_http_api,
-            ha_host_ip="192.168.1.2",
+            local_host="192.168.1.2",
             polling_interval=60,
         )
 
@@ -162,13 +163,33 @@ class TestDiscovery:
         mock_wiim_device_cls.return_value = mock_wiim_device
         mock_client_session_cls.return_value = MagicMock()
 
-        device = await async_create_wiim_device(
-            "http://192.168.1.10:49152/description.xml",
-            mock_session,
+        with pytest.raises(WiimDeviceException, match="Failed to initialize WiiM device"):
+            await async_create_wiim_device(
+                "http://192.168.1.10:49152/description.xml",
+                mock_session,
+            )
+
+        mock_wiim_device.disconnect.assert_awaited_once()
+
+    @patch("wiim.discovery.UpnpFactory")
+    async def test_async_create_wiim_device_raises_on_verify_failure(
+        self,
+        mock_factory,
+        mock_session,
+    ):
+        """Test failed verification raises instead of returning None."""
+        mock_factory.return_value.async_create_device = AsyncMock(
+            side_effect=UpnpConnectionError("Connection failed")
         )
 
-        assert device is None
-        mock_wiim_device.disconnect.assert_awaited_once()
+        with pytest.raises(
+            WiimRequestException,
+            match="Failed to verify WiiM device",
+        ):
+            await async_create_wiim_device(
+                "http://192.168.1.10:49152/description.xml",
+                mock_session,
+            )
 
     @patch("wiim.discovery.UpnpFactory")
     async def test_async_probe_wiim_device(

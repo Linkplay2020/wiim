@@ -12,7 +12,7 @@ from async_upnp_client.exceptions import UpnpConnectionError, UpnpError
 
 from .consts import MANUFACTURER_WIIM, SDK_LOGGER, UPNP_DEVICE_TYPE, WiimHttpCommand
 from .endpoint import WiimApiEndpoint
-from .exceptions import WiimRequestException
+from .exceptions import WiimDeviceException, WiimRequestException
 from .models import WiimProbeResult
 from .wiim_device import DEFAULT_AVAILABILITY_POLLING_INTERVAL, WiimDevice
 
@@ -156,16 +156,16 @@ async def async_create_wiim_device(
     session: ClientSession,
     *,
     host: str | None = None,
-    ha_host_ip: str | None = None,
+    local_host: str | None = None,
     polling_interval: int = DEFAULT_AVAILABILITY_POLLING_INTERVAL,
     initialize: bool = True,
-) -> WiimDevice | None:
+) -> WiimDevice:
     """Create a validated WiiM device from a UPnP location URL."""
     logger = SDK_LOGGER
 
     upnp_device = await verify_wiim_device(location, session)
     if upnp_device is None:
-        return None
+        raise WiimRequestException(f"Failed to verify WiiM device at {location}")
 
     http_api = await async_create_http_api_endpoint(host or urlparse(location).hostname)
 
@@ -173,7 +173,7 @@ async def async_create_wiim_device(
         upnp_device,
         session,
         http_api_endpoint=http_api,
-        ha_host_ip=ha_host_ip,
+        local_host=local_host,
         polling_interval=polling_interval,
     )
 
@@ -193,7 +193,9 @@ async def async_create_wiim_device(
         upnp_device.friendly_name,
     )
     await wiim_device.disconnect()
-    return None
+    raise WiimDeviceException(
+        f"Failed to initialize WiiM device from {upnp_device.friendly_name}"
+    )
 
 
 async def async_discover_wiim_devices_upnp(
@@ -223,8 +225,13 @@ async def async_discover_wiim_devices_upnp(
             )
             return
 
-        wiim_device = await async_create_wiim_device(location, session)
-        if wiim_device and wiim_device.udn not in discovered_devices:
+        try:
+            wiim_device = await async_create_wiim_device(location, session)
+        except (WiimDeviceException, WiimRequestException) as err:
+            logger.debug("Skipping device at %s during discovery: %s", location, err)
+            return
+
+        if wiim_device.udn not in discovered_devices:
             discovered_devices[wiim_device.udn] = wiim_device
 
     logger.warning(

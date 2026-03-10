@@ -89,7 +89,7 @@ class WiimDevice:
         upnp_device: UpnpDevice,
         session: ClientSession,
         http_api_endpoint: WiimApiEndpoint | None = None,
-        ha_host_ip: str | None = None,
+        local_host: str | None = None,
         polling_interval: int = DEFAULT_AVAILABILITY_POLLING_INTERVAL,
     ):
         """Initialize the WiiM device."""
@@ -143,7 +143,7 @@ class WiimDevice:
         if hasattr(self.upnp_device, "requester") and self.upnp_device.requester:
             self.requester_for_eventing = self.upnp_device.requester  # type: ignore
 
-        self.ha_host_ip = ha_host_ip
+        self.local_host = local_host
         self.volume: int = 0
         self.is_muted: bool = False
         self.playing_status: PlayingStatus = PlayingStatus.STOPPED
@@ -194,7 +194,7 @@ class WiimDevice:
         if self.requester_for_eventing:
             try:
                 loop = asyncio.get_event_loop()
-                local_ip = self.ha_host_ip
+                local_ip = self.local_host
                 device_ip = self.ip_address
                 if device_ip:
                     last_octet = int(device_ip.split(".")[-1])
