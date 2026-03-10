@@ -31,3 +31,44 @@ class WiimLoopState:
 
     repeat: WiimRepeatMode
     shuffle: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WiimTransportCapabilities:
+    """Normalized transport capabilities derived from MEDIA_INFO."""
+
+    can_next: bool = True
+    can_previous: bool = True
+    can_repeat: bool = False
+    can_shuffle: bool = False
+    play_medium: str = ""
+    track_source: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class WiimPreset:
+    """A normalized preset entry."""
+
+    preset_id: int
+    title: str
+    image_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WiimQueueItem:
+    """A normalized queue item."""
+
+    queue_index: int
+    title: str
+    image_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WiimQueueSnapshot:
+    """Normalized queue browse state."""
+
+    items: tuple[WiimQueueItem, ...]
+    source_name: str | None = None
+    play_medium: str = ""
+    track_source: str = ""
+    is_active: bool = False

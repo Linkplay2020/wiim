@@ -20,8 +20,10 @@ from .consts import (
     CMD_TO_MODE_MAP,
     SDK_LOGGER,
     MANUFACTURER_WIIM,
+    PLAY_MEDIUMS_CTRL,
     SUPPORTED_INPUT_MODES_BY_MODEL,
     SUPPORTED_OUTPUT_MODES_BY_MODEL,
+    TRACK_SOURCES_CTRL,
     UPNP_AV_TRANSPORT_SERVICE_ID,
     UPNP_RENDERING_CONTROL_SERVICE_ID,
     UPNP_WIIM_PLAY_QUEUE_SERVICE_ID,
@@ -41,13 +43,22 @@ from .consts import (
     WiimHttpCommand,
     UPNP_TIMEOUT_TIME,
     AUDIO_AUX_MODE_IDS,
+    VALID_PLAY_MEDIUMS,
     wiimDeviceType,
 )
 from .endpoint import WiimApiEndpoint
 from .exceptions import WiimDeviceException, WiimRequestException
 from .handler import parse_last_change_event
 from .manufacturers import get_info_from_project
-from .models import WiimLoopState, WiimMediaMetadata, WiimRepeatMode
+from .models import (
+    WiimLoopState,
+    WiimMediaMetadata,
+    WiimPreset,
+    WiimQueueItem,
+    WiimQueueSnapshot,
+    WiimRepeatMode,
+    WiimTransportCapabilities,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -1316,6 +1327,42 @@ class WiimDevice:
         )
         self.loop_mode = loop
 
+    async def async_get_transport_capabilities(self) -> WiimTransportCapabilities:
+        """Return normalized transport capabilities for the current media context."""
+        if not self.supports_http_api:
+            return WiimTransportCapabilities()
+
+        media_info = await self.async_set_AVT_cmd(WiimHttpCommand.MEDIA_INFO)
+        if not isinstance(media_info, dict):
+            return WiimTransportCapabilities()
+
+        play_medium = media_info.get("PlayMedium")
+        if not isinstance(play_medium, str):
+            play_medium = ""
+
+        track_source = media_info.get("TrackSource")
+        if not isinstance(track_source, str):
+            track_source = ""
+
+        can_next = True
+        can_previous = True
+        if play_medium in PLAY_MEDIUMS_CTRL:
+            can_next = False
+            can_previous = False
+        elif track_source in TRACK_SOURCES_CTRL:
+            can_previous = False
+
+        loop_supported = play_medium in VALID_PLAY_MEDIUMS and track_source != ""
+
+        return WiimTransportCapabilities(
+            can_next=can_next,
+            can_previous=can_previous,
+            can_repeat=loop_supported,
+            can_shuffle=loop_supported,
+            play_medium=play_medium,
+            track_source=track_source,
+        )
+
     async def async_play_queue_with_index(self, index: int) -> None:
         """Set loop/repeat mode using UPnP."""
         await self._invoke_upnp_action(
@@ -1362,6 +1409,26 @@ class WiimDevice:
         except WiimDeviceException:
             return []
 
+    async def async_get_presets(self) -> tuple[WiimPreset, ...]:
+        """Return normalized presets for browsing."""
+        presets = await self.async_get_favorites()
+        results: list[WiimPreset] = []
+        for item in presets:
+            preset_id = item.get("uri")
+            if not preset_id or not str(preset_id).isdigit():
+                continue
+
+            preset_name = item.get("name", "")
+            title = preset_name.split("_#~", 1)[0] if "_#~" in preset_name else preset_name
+            results.append(
+                WiimPreset(
+                    preset_id=int(preset_id),
+                    title=title,
+                    image_url=item.get("image_url"),
+                )
+            )
+        return tuple(results)
+
     def _parse_preset_data(self, xml_str: str) -> list:
         """Parse queue data from PlayQueue service (needs actual format)."""
         try:
@@ -1405,6 +1472,60 @@ class WiimDevice:
             return self._parse_queue_data(result.get("QueueContext", ""))
         except WiimDeviceException:
             return []
+
+    async def async_get_queue_snapshot(self) -> WiimQueueSnapshot:
+        """Return normalized queue information for browsing."""
+        queue_items = await self.async_get_queue_items()
+        source_name = next(
+            (
+                item["SourceName"]
+                for item in queue_items
+                if isinstance(item, dict) and "SourceName" in item
+            ),
+            None,
+        )
+
+        media_info = await self.async_set_AVT_cmd(WiimHttpCommand.MEDIA_INFO)
+        if not isinstance(media_info, dict):
+            return WiimQueueSnapshot(items=(), source_name=source_name)
+
+        play_medium = media_info.get("PlayMedium")
+        if not isinstance(play_medium, str):
+            play_medium = ""
+
+        track_source = media_info.get("TrackSource")
+        if not isinstance(track_source, str):
+            track_source = ""
+
+        browseable = (
+            play_medium in VALID_PLAY_MEDIUMS
+            and track_source != ""
+            and (
+                source_name is None
+                or source_name == "MyFavouriteQueue"
+                or track_source in source_name
+            )
+        )
+
+        normalized_items = tuple(
+            WiimQueueItem(
+                queue_index=int(item["uri"]),
+                title=item["name"],
+                image_url=item.get("image_url"),
+            )
+            for item in queue_items
+            if isinstance(item, dict)
+            and str(item.get("uri", "")).isdigit()
+            and "name" in item
+        )
+
+        return WiimQueueSnapshot(
+            items=normalized_items,
+            source_name=source_name,
+            play_medium=play_medium,
+            track_source=track_source,
+            is_active=browseable,
+        )
 
     def _parse_queue_data(self, xml_str: str) -> list:
         """Parse queue data from PlayQueue service (needs actual format)."""
