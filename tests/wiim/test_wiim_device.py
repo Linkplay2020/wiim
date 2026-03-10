@@ -7,7 +7,6 @@ from wiim.consts import (
     DeviceAttribute,
     PlayerAttribute,
     PlayingStatus,
-    MuteMode,
     WiimHttpCommand,
     InputMode,
 )

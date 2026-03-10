@@ -1767,6 +1767,19 @@ class WiimDevice:
                     exc_info=True,
                 )
 
+        if self._http_api:
+            try:
+                await self._http_api.async_close()
+            except Exception as err:
+                self.logger.warning(
+                    "Device %s: Error closing HTTP API session: %s",
+                    self.name,
+                    err,
+                    exc_info=True,
+                )
+            finally:
+                self._http_api = None
+
         self._event_handler_started = False
         self._available = False
 

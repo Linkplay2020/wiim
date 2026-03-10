@@ -3,15 +3,13 @@ import asyncio
 import logging
 from typing import Dict
 
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf, Zeroconf
 
 from .consts import SDK_LOGGER
 from .controller import WiimController
-from .discovery import verify_wiim_device
-from .endpoint import WiimApiEndpoint
-from .wiim_device import WiimDevice
+from .discovery import async_create_wiim_device
 
 
 class ZeroconfListener:
@@ -43,7 +41,7 @@ class ZeroconfListener:
 
 async def _create_cli_session() -> ClientSession:
     """Creates an aiohttp client session for the CLI."""
-    return ClientSession(connector=TCPConnector(ssl=False))
+    return ClientSession()
 
 
 async def main_cli():
@@ -98,39 +96,24 @@ async def main_cli():
                 f"http://{wiim_device_ip}:49152/description.xml",
             ]
 
-            upnp_device = None
+            wiim_device = None
             for location in potential_locations:
-                # Use the verify_wiim_device function from discovery.py to check if this is a WiiM device
-                upnp_device = await verify_wiim_device(location, session)
-                if upnp_device:
+                wiim_device = await async_create_wiim_device(
+                    location,
+                    session,
+                    host=wiim_device_ip,
+                )
+                if wiim_device:
                     SDK_LOGGER.info(f"Successfully verified WiiM device at {location}")
                     break
 
-            if not upnp_device:
+            if not wiim_device:
                 SDK_LOGGER.warning(
                     f"Could not verify device '{name}' at {wiim_device_ip}. It might not be a WiiM device or is not responding."
                 )
                 continue
 
-            # Create an HTTP API endpoint, using the WiiM device's IP
-            http_api = WiimApiEndpoint(
-                protocol="https", port=443, endpoint=wiim_device_ip, session=session
-            )
-
-            # Create and initialize the WiimDevice instance.
-            # Set ha_host_ip to the local IP address we just obtained.
-            wiim_dev = WiimDevice(
-                upnp_device,
-                session,
-                http_api_endpoint=http_api,
-                ha_host_ip=wiim_device_ip,
-                polling_interval=60,
-            )
-            await controller.add_device(wiim_dev)
-            # if await wiim_dev.async_init_services_and_subscribe():
-            #     await controller.add_device(wiim_dev)
-            # else:
-            #     SDK_LOGGER.warning(f"Failed to initialize WiimDevice after discovery: {upnp_device.friendly_name}")
+            await controller.add_device(wiim_device)
 
         if not controller.devices:
             SDK_LOGGER.info("No verifiable WiiM devices could be initialized.")

@@ -39,7 +39,14 @@ class WiimApiEndpoint(WiimBaseEndpoint):
     """Represents a WiiM HTTP API endpoint."""
 
     def __init__(
-        self, *, protocol: str, port: int, endpoint: str, session: ClientSession
+        self,
+        *,
+        protocol: str,
+        port: int,
+        endpoint: str,
+        session: ClientSession,
+        verify_ssl: bool = True,
+        owns_session: bool = False,
     ):
         assert protocol in [
             "http",
@@ -52,6 +59,10 @@ class WiimApiEndpoint(WiimBaseEndpoint):
         port_suffix = f":{port}" if include_port else ""
         self._base_url: str = f"{protocol}://{endpoint}{port_suffix}"
         self._session: ClientSession = session
+        self._owns_session = owns_session
+        self._request_kwargs: dict[str, Any] = {}
+        if protocol == "https" and not verify_ssl:
+            self._request_kwargs["ssl"] = False
         self.logger.debug("WiimApiEndpoint initialized for %s", self._base_url)
 
     def to_dict(self) -> dict[str, str]:
@@ -67,7 +78,9 @@ class WiimApiEndpoint(WiimBaseEndpoint):
         self.logger.debug(f"Requesting (expect OK): {url}")
         try:
             async with self._session.get(
-                url, timeout=ClientTimeout(total=API_TIMEOUT)
+                url,
+                timeout=ClientTimeout(total=API_TIMEOUT),
+                **self._request_kwargs,
             ) as response:
                 response_text = await response.text()
                 self.logger.debug(
@@ -97,7 +110,9 @@ class WiimApiEndpoint(WiimBaseEndpoint):
         self.logger.debug(f"Requesting (expect JSON): {url}")
         try:
             async with self._session.get(
-                url, timeout=ClientTimeout(total=API_TIMEOUT)
+                url,
+                timeout=ClientTimeout(total=API_TIMEOUT),
+                **self._request_kwargs,
             ) as response:
                 response_text = await response.text()
                 self.logger.debug(
@@ -159,3 +174,8 @@ class WiimApiEndpoint(WiimBaseEndpoint):
 
     def __str__(self) -> str:
         return self._base_url
+
+    async def async_close(self) -> None:
+        """Close the underlying aiohttp session if this endpoint owns it."""
+        if self._owns_session and not self._session.closed:
+            await self._session.close()

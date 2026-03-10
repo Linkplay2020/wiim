@@ -2,8 +2,12 @@
 """WiiM Asynchronous Python SDK."""
 
 from .__version__ import __version__
-from .wiim_device import WiimDevice
 from .controller import WiimController
+from .discovery import (
+    async_create_http_api_endpoint,
+    async_create_wiim_device,
+    verify_wiim_device,
+)
 from .endpoint import WiimApiEndpoint, WiimBaseEndpoint
 from .exceptions import (
     WiimException,
@@ -11,6 +15,7 @@ from .exceptions import (
     WiimInvalidDataException,
     WiimDeviceException,
 )
+from .wiim_device import WiimDevice
 from .consts import (
     PlayingStatus,
     PlayingMode,
@@ -35,6 +40,9 @@ __all__ = [
     "WiimController",
     "WiimApiEndpoint",
     "WiimBaseEndpoint",
+    "async_create_http_api_endpoint",
+    "async_create_wiim_device",
+    "verify_wiim_device",
     "WiimException",
     "WiimRequestException",
     "WiimInvalidDataException",
