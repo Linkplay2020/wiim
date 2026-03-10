@@ -20,6 +20,8 @@ from .consts import (
     CMD_TO_MODE_MAP,
     SDK_LOGGER,
     MANUFACTURER_WIIM,
+    SUPPORTED_INPUT_MODES_BY_MODEL,
+    SUPPORTED_OUTPUT_MODES_BY_MODEL,
     UPNP_AV_TRANSPORT_SERVICE_ID,
     UPNP_RENDERING_CONTROL_SERVICE_ID,
     UPNP_WIIM_PLAY_QUEUE_SERVICE_ID,
@@ -39,11 +41,13 @@ from .consts import (
     WiimHttpCommand,
     UPNP_TIMEOUT_TIME,
     AUDIO_AUX_MODE_IDS,
+    wiimDeviceType,
 )
 from .endpoint import WiimApiEndpoint
 from .exceptions import WiimDeviceException, WiimRequestException
 from .handler import parse_last_change_event
 from .manufacturers import get_info_from_project
+from .models import WiimLoopState, WiimMediaMetadata, WiimRepeatMode
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -155,6 +159,20 @@ class WiimDevice:
 
         self._polling_interval = polling_interval
         self._polling_task: asyncio.Task | None = None
+
+    def _supported_model_name(self) -> str | None:
+        """Return the best model name available for capability lookups."""
+        model_name = self.model_name
+        if (
+            model_name in SUPPORTED_INPUT_MODES_BY_MODEL
+            or model_name in SUPPORTED_OUTPUT_MODES_BY_MODEL
+        ):
+            return model_name
+
+        if self._udn.startswith("uuid:") and len(self._udn) >= 13:
+            return wiimDeviceType.get(self._udn[5:13], model_name)
+
+        return model_name
 
     async def async_init_services_and_subscribe(self) -> bool:
         """
@@ -910,6 +928,9 @@ class WiimDevice:
                     "albumArtURI": self.make_absolute_url(  # noqa: SLF001
                         meta.get("albumArtURI")
                     ),
+                    "album_art_uri": self.make_absolute_url(  # noqa: SLF001
+                        meta.get("albumArtURI")
+                    ),
                 }
 
             except Exception as e:
@@ -1473,6 +1494,40 @@ class WiimDevice:
         )
 
     @property
+    def supported_input_modes(self) -> tuple[str, ...]:
+        """Return the supported input mode display names for the device."""
+        model_name = self._supported_model_name()
+        if not model_name:
+            return ()
+
+        modes_flag = SUPPORTED_INPUT_MODES_BY_MODEL.get(model_name)
+        if modes_flag is None:
+            return ()
+
+        return tuple(
+            mode.display_name  # type: ignore[attr-defined]
+            for mode in InputMode
+            if modes_flag & mode.value
+        )
+
+    @property
+    def supported_output_modes(self) -> tuple[str, ...]:
+        """Return the supported output mode display names for the device."""
+        model_name = self._supported_model_name()
+        if not model_name:
+            return ()
+
+        modes_flag = SUPPORTED_OUTPUT_MODES_BY_MODEL.get(model_name)
+        if modes_flag is None:
+            return ()
+
+        return tuple(
+            mode.display_name  # type: ignore[attr-defined]
+            for mode in AudioOutputHwMode
+            if modes_flag & mode.value
+        )
+
+    @property
     def firmware_version(self) -> str | None:
         """Return the firmware version from HTTP API."""
         if hasattr(self, "_device_info_properties") and self._device_info_properties:
@@ -1519,7 +1574,83 @@ class WiimDevice:
     @property
     def album_art_uri(self) -> str | None:
         """Return the current track's album art URI."""
-        return self.current_track_info.get("album_art_uri")
+        if media := self.current_media:
+            return media.image_url
+        return None
+
+    @property
+    def current_media(self) -> WiimMediaMetadata | None:
+        """Return normalized current media metadata."""
+        if not self.current_track_info:
+            return None
+
+        return WiimMediaMetadata(
+            title=self.current_track_info.get("title"),
+            artist=self.current_track_info.get("artist"),
+            album=self.current_track_info.get("album"),
+            image_url=self.current_track_info.get("albumArtURI")
+            or self.current_track_info.get("album_art_uri"),
+            uri=self.current_track_info.get("uri"),
+            duration=self.current_track_duration or self.current_track_info.get(
+                "duration"
+            ),
+            position=self.current_position,
+        )
+
+    @property
+    def loop_state(self) -> WiimLoopState:
+        """Return normalized repeat/shuffle settings for the current loop mode."""
+        mapping = {
+            LoopMode.SHUFFLE_DISABLE_REPEAT_ALL: WiimLoopState(
+                repeat=WiimRepeatMode.ALL,
+                shuffle=False,
+            ),
+            LoopMode.SHUFFLE_DISABLE_REPEAT_ONE: WiimLoopState(
+                repeat=WiimRepeatMode.ONE,
+                shuffle=False,
+            ),
+            LoopMode.SHUFFLE_ENABLE_REPEAT_ALL: WiimLoopState(
+                repeat=WiimRepeatMode.ALL,
+                shuffle=True,
+            ),
+            LoopMode.SHUFFLE_ENABLE_REPEAT_NONE: WiimLoopState(
+                repeat=WiimRepeatMode.OFF,
+                shuffle=True,
+            ),
+            LoopMode.SHUFFLE_DISABLE_REPEAT_NONE: WiimLoopState(
+                repeat=WiimRepeatMode.OFF,
+                shuffle=False,
+            ),
+            LoopMode.SHUFFLE_ENABLE_REPEAT_ONE: WiimLoopState(
+                repeat=WiimRepeatMode.ONE,
+                shuffle=True,
+            ),
+        }
+        return mapping.get(
+            self.loop_mode,
+            WiimLoopState(repeat=WiimRepeatMode.OFF, shuffle=False),
+        )
+
+    @staticmethod
+    def build_loop_mode(repeat: WiimRepeatMode, shuffle: bool) -> LoopMode:
+        """Return the SDK loop mode for the given repeat and shuffle settings."""
+        if repeat == WiimRepeatMode.ALL:
+            return (
+                LoopMode.SHUFFLE_ENABLE_REPEAT_ALL
+                if shuffle
+                else LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
+            )
+        if repeat == WiimRepeatMode.ONE:
+            return (
+                LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
+                if shuffle
+                else LoopMode.SHUFFLE_DISABLE_REPEAT_ONE
+            )
+        return (
+            LoopMode.SHUFFLE_ENABLE_REPEAT_NONE
+            if shuffle
+            else LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
+        )
 
     @property
     def manufacturer(self) -> str | None:

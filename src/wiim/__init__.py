@@ -15,6 +15,7 @@ from .exceptions import (
     WiimInvalidDataException,
     WiimDeviceException,
 )
+from .models import WiimLoopState, WiimMediaMetadata, WiimRepeatMode
 from .wiim_device import WiimDevice
 from .consts import (
     PlayingStatus,
@@ -47,6 +48,9 @@ __all__ = [
     "WiimRequestException",
     "WiimInvalidDataException",
     "WiimDeviceException",
+    "WiimLoopState",
+    "WiimMediaMetadata",
+    "WiimRepeatMode",
     "PlayingStatus",
     "PlayingMode",
     "LoopMode",

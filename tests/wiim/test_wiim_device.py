@@ -5,11 +5,13 @@ from wiim.wiim_device import WiimDevice
 from wiim.endpoint import WiimApiEndpoint
 from wiim.consts import (
     DeviceAttribute,
+    LoopMode,
     PlayerAttribute,
     PlayingStatus,
     WiimHttpCommand,
     InputMode,
 )
+from wiim.models import WiimRepeatMode
 
 
 @patch("wiim.wiim_device.AiohttpNotifyServer", MagicMock())
@@ -132,3 +134,49 @@ class TestWiimDevice:
         assert device.parse_duration("00:02:30.123") == 150
         assert device.parse_duration(None) == 0
         assert device.parse_duration("NOT_IMPLEMENTED") == 0
+
+    def test_supported_modes_from_model(self, mock_upnp_device, mock_session):
+        """Test supported input/output modes are derived by the SDK."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+
+        assert InputMode.LINE_IN.display_name in device.supported_input_modes  # type: ignore[attr-defined]
+        assert "Optical Out" in device.supported_output_modes
+
+    def test_current_media_uses_normalized_metadata(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test current media metadata is exposed through a typed helper."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device.current_track_info = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "uri": "https://example.com/song.mp3",
+            "albumArtURI": "https://example.com/art.jpg",
+        }
+        device.current_track_duration = 210
+        device.current_position = 15
+
+        media = device.current_media
+
+        assert media is not None
+        assert media.title == "Test Song"
+        assert media.artist == "Test Artist"
+        assert media.album == "Test Album"
+        assert media.uri == "https://example.com/song.mp3"
+        assert media.image_url == "https://example.com/art.jpg"
+        assert media.duration == 210
+        assert media.position == 15
+        assert device.album_art_uri == "https://example.com/art.jpg"
+
+    def test_loop_state_helpers(self, mock_upnp_device, mock_session):
+        """Test normalized loop mode helpers."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device.loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
+
+        assert device.loop_state.repeat == WiimRepeatMode.ONE
+        assert device.loop_state.shuffle is True
+        assert (
+            WiimDevice.build_loop_mode(WiimRepeatMode.ALL, shuffle=False)
+            == LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
+        )
