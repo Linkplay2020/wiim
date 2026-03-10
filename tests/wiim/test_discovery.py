@@ -3,7 +3,11 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 from async_upnp_client.exceptions import UpnpConnectionError
-from wiim.discovery import async_create_wiim_device, verify_wiim_device
+from wiim.discovery import (
+    async_create_wiim_device,
+    async_probe_wiim_device,
+    verify_wiim_device,
+)
 
 
 @pytest.mark.asyncio
@@ -165,3 +169,31 @@ class TestDiscovery:
 
         assert device is None
         mock_wiim_device.disconnect.assert_awaited_once()
+
+    @patch("wiim.discovery.UpnpFactory")
+    async def test_async_probe_wiim_device(
+        self,
+        mock_factory,
+        mock_session,
+    ):
+        """Test probing returns normalized discovery data."""
+        mock_upnp_device = MagicMock()
+        mock_upnp_device.manufacturer = "Linkplay Technology Inc."
+        mock_upnp_device.friendly_name = "WiiM Pro"
+        mock_upnp_device.udn = "uuid:some-udn"
+        mock_upnp_device.model_name = "WiiM Pro"
+        mock_factory.return_value.async_create_device = AsyncMock(
+            return_value=mock_upnp_device
+        )
+
+        result = await async_probe_wiim_device(
+            "http://192.168.1.10:49152/description.xml",
+            mock_session,
+        )
+
+        assert result is not None
+        assert result.udn == "uuid:some-udn"
+        assert result.name == "WiiM Pro"
+        assert result.model == "WiiM Pro"
+        assert result.host == "192.168.1.10"
+        assert result.location == "http://192.168.1.10:49152/description.xml"

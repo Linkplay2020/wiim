@@ -5,6 +5,7 @@ from .__version__ import __version__
 from .controller import WiimController
 from .discovery import (
     async_create_http_api_endpoint,
+    async_probe_wiim_device,
     async_create_wiim_device,
     verify_wiim_device,
 )
@@ -21,6 +22,7 @@ from .models import (
     WiimGroupRole,
     WiimGroupSnapshot,
     WiimPreset,
+    WiimProbeResult,
     WiimQueueItem,
     WiimQueueSnapshot,
     WiimRepeatMode,
@@ -52,6 +54,7 @@ __all__ = [
     "WiimApiEndpoint",
     "WiimBaseEndpoint",
     "async_create_http_api_endpoint",
+    "async_probe_wiim_device",
     "async_create_wiim_device",
     "verify_wiim_device",
     "WiimException",
@@ -63,6 +66,7 @@ __all__ = [
     "WiimGroupRole",
     "WiimGroupSnapshot",
     "WiimPreset",
+    "WiimProbeResult",
     "WiimQueueItem",
     "WiimQueueSnapshot",
     "WiimRepeatMode",

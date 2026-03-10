@@ -13,6 +13,7 @@ from async_upnp_client.exceptions import UpnpConnectionError, UpnpError
 from .consts import MANUFACTURER_WIIM, SDK_LOGGER, UPNP_DEVICE_TYPE, WiimHttpCommand
 from .endpoint import WiimApiEndpoint
 from .exceptions import WiimRequestException
+from .models import WiimProbeResult
 from .wiim_device import DEFAULT_AVAILABILITY_POLLING_INTERVAL, WiimDevice
 
 if TYPE_CHECKING:
@@ -124,6 +125,30 @@ async def async_create_http_api_endpoint(
         await http_api.async_close()
         return None
     return http_api
+
+
+async def async_probe_wiim_device(
+    location: str,
+    session: ClientSession,
+    *,
+    host: str | None = None,
+) -> WiimProbeResult | None:
+    """Probe a WiiM device and return normalized discovery information."""
+    upnp_device = await verify_wiim_device(location, session)
+    if upnp_device is None:
+        return None
+
+    resolved_host = host or urlparse(location).hostname
+    if resolved_host is None:
+        return None
+
+    return WiimProbeResult(
+        udn=upnp_device.udn,
+        name=upnp_device.friendly_name,
+        model=upnp_device.model_name or "WiiM Device",
+        host=resolved_host,
+        location=location or upnp_device.device_url,
+    )
 
 
 async def async_create_wiim_device(

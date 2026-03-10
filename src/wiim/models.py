@@ -94,3 +94,14 @@ class WiimGroupSnapshot:
     def command_target_udn(self) -> str:
         """Return the device UDN that should receive direct commands."""
         return self.leader_udn
+
+
+@dataclass(frozen=True, slots=True)
+class WiimProbeResult:
+    """Normalized probe result for discovery/config flows."""
+
+    udn: str
+    name: str
+    model: str
+    host: str
+    location: str
