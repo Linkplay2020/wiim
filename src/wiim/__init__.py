@@ -18,6 +18,8 @@ from .exceptions import (
 from .models import (
     WiimLoopState,
     WiimMediaMetadata,
+    WiimGroupRole,
+    WiimGroupSnapshot,
     WiimPreset,
     WiimQueueItem,
     WiimQueueSnapshot,
@@ -58,6 +60,8 @@ __all__ = [
     "WiimDeviceException",
     "WiimLoopState",
     "WiimMediaMetadata",
+    "WiimGroupRole",
+    "WiimGroupSnapshot",
     "WiimPreset",
     "WiimQueueItem",
     "WiimQueueSnapshot",

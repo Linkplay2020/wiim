@@ -72,3 +72,25 @@ class WiimQueueSnapshot:
     play_medium: str = ""
     track_source: str = ""
     is_active: bool = False
+
+
+class WiimGroupRole(StrEnum):
+    """Normalized multiroom role for a device."""
+
+    LEADER = "leader"
+    FOLLOWER = "follower"
+    STANDALONE = "standalone"
+
+
+@dataclass(frozen=True, slots=True)
+class WiimGroupSnapshot:
+    """Normalized group state for a device."""
+
+    role: WiimGroupRole
+    leader_udn: str
+    member_udns: tuple[str, ...]
+
+    @property
+    def command_target_udn(self) -> str:
+        """Return the device UDN that should receive direct commands."""
+        return self.leader_udn

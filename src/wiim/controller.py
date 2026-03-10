@@ -12,6 +12,7 @@ from .exceptions import WiimException
 from .consts import WiimHttpCommand, MultiroomAttribute
 from .discovery import async_discover_wiim_devices_upnp
 from .exceptions import WiimRequestException
+from .models import WiimGroupRole, WiimGroupSnapshot
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -220,17 +221,48 @@ class WiimController:
         Get the group role (leader/follower/standalone) and leader UDN for a given device.
         Returns: {"role": "leader"|"follower"|"standalone", "leader_udn": leader's UDN}
         """
+        snapshot = self.get_group_snapshot(device_udn)
+        if snapshot is None:
+            return None
+
+        return {
+            "role": snapshot.role.value,
+            "leader_udn": snapshot.leader_udn,
+        }
+
+    def get_group_snapshot(self, device_udn: str) -> WiimGroupSnapshot | None:
+        """Return a typed multiroom snapshot for the given device."""
         if device_udn in self._multiroom_groups:
-            return {"role": "leader", "leader_udn": device_udn}
+            follower_udns = tuple(self._multiroom_groups[device_udn])
+            return WiimGroupSnapshot(
+                role=WiimGroupRole.LEADER,
+                leader_udn=device_udn,
+                member_udns=(device_udn, *follower_udns),
+            )
 
         for leader_udn, follower_udns in self._multiroom_groups.items():
             if device_udn in follower_udns:
-                return {"role": "follower", "leader_udn": leader_udn}
+                return WiimGroupSnapshot(
+                    role=WiimGroupRole.FOLLOWER,
+                    leader_udn=leader_udn,
+                    member_udns=(leader_udn, *tuple(follower_udns)),
+                )
 
         if self.get_device(device_udn):
-            return {"role": "standalone", "leader_udn": device_udn}
+            return WiimGroupSnapshot(
+                role=WiimGroupRole.STANDALONE,
+                leader_udn=device_udn,
+                member_udns=(device_udn,),
+            )
 
         return None
+
+    def get_command_target_udn(self, device_udn: str) -> str | None:
+        """Return the device UDN that should receive direct commands."""
+        snapshot = self.get_group_snapshot(device_udn)
+        if snapshot is None:
+            return None
+        return snapshot.command_target_udn
 
     def get_group_members(self, device_udn: str) -> List[WiimDevice]:
         """
