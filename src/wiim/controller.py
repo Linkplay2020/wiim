@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     List,
-    Optional,
     Dict,
 )
 
@@ -30,9 +29,12 @@ class WiimController:
         self._event_callback = event_callback
         self.logger = SDK_LOGGER
 
-    def get_device(self, udn: str) -> WiimDevice | None:
+    def get_device(self, udn: str) -> WiimDevice:
         """Get a device by its UDN."""
-        return self._devices.get(udn)
+        try:
+            return self._devices[udn]
+        except KeyError as err:
+            raise ValueError(f"Device {udn} is not managed by the controller") from err
 
     @property
     def devices(self) -> List[WiimDevice]:
@@ -112,8 +114,7 @@ class WiimController:
                                 )
 
                                 if full_follower_udn:
-                                    follower_device = self.get_device(full_follower_udn)
-                                    if follower_device:
+                                    if full_follower_udn in self._devices:
                                         follower_udns.append(full_follower_udn)
                                     else:
                                         self.logger.warning(
@@ -216,22 +217,22 @@ class WiimController:
             self._multiroom_groups,
         )
 
-    def get_device_group_info(self, device_udn: str) -> Optional[Dict[str, str]]:
+    def get_device_group_info(self, device_udn: str) -> Dict[str, str]:
         """
         Get the group role (leader/follower/standalone) and leader UDN for a given device.
         Returns: {"role": "leader"|"follower"|"standalone", "leader_udn": leader's UDN}
         """
         snapshot = self.get_group_snapshot(device_udn)
-        if snapshot is None:
-            return None
 
         return {
             "role": snapshot.role.value,
             "leader_udn": snapshot.leader_udn,
         }
 
-    def get_group_snapshot(self, device_udn: str) -> WiimGroupSnapshot | None:
+    def get_group_snapshot(self, device_udn: str) -> WiimGroupSnapshot:
         """Return a typed multiroom snapshot for the given device."""
+        self.get_device(device_udn)
+
         if device_udn in self._multiroom_groups:
             follower_udns = tuple(self._multiroom_groups[device_udn])
             return WiimGroupSnapshot(
@@ -244,62 +245,35 @@ class WiimController:
             if device_udn in follower_udns:
                 return WiimGroupSnapshot(
                     role=WiimGroupRole.FOLLOWER,
-                    leader_udn=leader_udn,
-                    member_udns=(leader_udn, *tuple(follower_udns)),
-                )
-
-        if self.get_device(device_udn):
-            return WiimGroupSnapshot(
-                role=WiimGroupRole.STANDALONE,
-                leader_udn=device_udn,
-                member_udns=(device_udn,),
+                leader_udn=leader_udn,
+                member_udns=(leader_udn, *tuple(follower_udns)),
             )
 
-        return None
+        return WiimGroupSnapshot(
+            role=WiimGroupRole.STANDALONE,
+            leader_udn=device_udn,
+            member_udns=(device_udn,),
+        )
 
-    def get_command_target_udn(self, device_udn: str) -> str | None:
+    def get_command_target_udn(self, device_udn: str) -> str:
         """Return the device UDN that should receive direct commands."""
-        snapshot = self.get_group_snapshot(device_udn)
-        if snapshot is None:
-            return None
-        return snapshot.command_target_udn
+        return self.get_group_snapshot(device_udn).command_target_udn
 
     def get_group_members(self, device_udn: str) -> List[WiimDevice]:
         """
         Get all members of the group the given device belongs to (including itself).
         Returns a list of WiimDevice objects.
         """
-        leader_udn: Optional[str] = None
-        group_members_udns: List[str] = []
-
-        if device_udn in self._multiroom_groups:
-            leader_udn = device_udn
-            group_members_udns = [leader_udn] + self._multiroom_groups[leader_udn]
-        else:
-            for l_udn, f_udns in self._multiroom_groups.items():
-                if device_udn in f_udns:
-                    leader_udn = l_udn
-                    group_members_udns = [leader_udn] + f_udns
-                    break
-
-        if not group_members_udns:
-            device = self.get_device(device_udn)
-            return [device] if device else []
-
-        result_devices: List[WiimDevice] = []
-        for udn in set(group_members_udns):
-            device_obj = self.get_device(udn)
-            if device_obj:
-                result_devices.append(device_obj)
-        return result_devices
+        return [
+            self.get_device(member_udn)
+            for member_udn in self.get_group_snapshot(device_udn).member_udns
+        ]
 
     async def async_join_group(self, leader_udn: str, follower_udn: str) -> None:
         """Make follower_udn join the group led by leader_udn."""
         leader = self.get_device(leader_udn)
         follower = self.get_device(follower_udn)
 
-        if not leader or not follower:
-            raise WiimException("Leader or follower device not found.")
         if not leader._http_api or not follower._http_api:
             raise WiimException("HTTP API not available for leader or follower.")
 
@@ -350,14 +324,14 @@ class WiimController:
     async def async_ungroup_device(self, device_udn: str) -> None:
         """Make a device leave its current group. If it's a leader, the whole group is disbanded."""
         device = self.get_device(device_udn)
-        if not device or not device._http_api:
+        if not device._http_api:
             raise WiimException("Device not found or HTTP API unavailable.")
 
         group_info = self.get_device_group_info(device_udn)
         original_leader_to_update: WiimDevice | None = None
         self.logger.info("Gourp info %s, device uid = %s", group_info, device_udn)
 
-        if group_info and group_info.get("role") == "leader":
+        if group_info["role"] == "leader":
             self.logger.info(
                 "Ungrouping multiroom group led by %s (UDN: %s)",
                 device.name,
@@ -367,17 +341,9 @@ class WiimController:
             if device_udn in self._multiroom_groups:
                 del self._multiroom_groups[device_udn]
             original_leader_to_update = device
-        elif group_info and group_info.get("role") == "follower":
-            leader_udn_of_follower = group_info.get("leader_udn")
-            leader_of_this_device = None
-
-            if leader_udn_of_follower is not None:
-                leader_of_this_device = self.get_device(leader_udn_of_follower)
-
-            if not leader_of_this_device:
-                raise WiimException(
-                    f"Leader {leader_udn_of_follower} for follower {device.name} not found."
-                )
+        elif group_info["role"] == "follower":
+            leader_udn_of_follower = group_info["leader_udn"]
+            leader_of_this_device = self.get_device(leader_udn_of_follower)
             if not leader_of_this_device._http_api:
                 raise WiimException(
                     f"Leader {leader_of_this_device.name} HTTP API unavailable for Kick command."
