@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from wiim.controller import WiimController
+from wiim.models import WiimGroupRole
 from wiim.wiim_device import WiimDevice
 from wiim.consts import WiimHttpCommand, MultiroomAttribute
 
@@ -23,6 +24,13 @@ class TestWiimController:
         await controller.remove_device(mock_wiim_device.udn)
         assert len(controller.devices) == 0
         mock_wiim_device.disconnect.assert_called_once()
+
+    def test_get_device_raises_for_unknown_udn(self, mock_session):
+        """Test managed device lookups raise for unknown UDNs."""
+        controller = WiimController(mock_session)
+
+        with pytest.raises(ValueError, match="unknown_udn"):
+            controller.get_device("unknown_udn")
 
     def test_restore_full_udn(self, mock_session):
         """Test the helper function that reconstructs a full UDN from a short UUID."""
@@ -93,7 +101,36 @@ class TestWiimController:
             "role": "standalone",
             "leader_udn": "standalone_udn",
         }
-        assert controller.get_device_group_info("unknown_udn") is None
+        with pytest.raises(ValueError, match="unknown_udn"):
+            controller.get_device_group_info("unknown_udn")
+
+    def test_get_group_snapshot(self, mock_session):
+        """Test typed group snapshots."""
+        controller = WiimController(mock_session)
+        controller._multiroom_groups = {"leader_udn": ["follower_udn"]}
+        controller._devices = {
+            "leader_udn": MagicMock(),
+            "follower_udn": MagicMock(),
+            "standalone_udn": MagicMock(),
+        }
+
+        leader_snapshot = controller.get_group_snapshot("leader_udn")
+        follower_snapshot = controller.get_group_snapshot("follower_udn")
+        standalone_snapshot = controller.get_group_snapshot("standalone_udn")
+
+        assert leader_snapshot is not None
+        assert leader_snapshot.role == WiimGroupRole.LEADER
+        assert leader_snapshot.member_udns == ("leader_udn", "follower_udn")
+        assert follower_snapshot is not None
+        assert follower_snapshot.role == WiimGroupRole.FOLLOWER
+        assert follower_snapshot.command_target_udn == "leader_udn"
+        assert standalone_snapshot is not None
+        assert standalone_snapshot.role == WiimGroupRole.STANDALONE
+        assert standalone_snapshot.member_udns == ("standalone_udn",)
+        assert controller.get_command_target_udn("follower_udn") == "leader_udn"
+
+        with pytest.raises(ValueError, match="unknown_udn"):
+            controller.get_group_snapshot("unknown_udn")
 
     @pytest.mark.asyncio
     async def test_async_join_group(self, mock_session, mock_wiim_device):

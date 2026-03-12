@@ -59,6 +59,42 @@ class TestWiimApiEndpoint:
             await endpoint.request("getStatusEx")
 
     @pytest.mark.asyncio
+    async def test_request_with_ssl_verification_disabled(self, mock_session):
+        """Test disabling SSL verification uses the shared session with ssl=False."""
+        endpoint = WiimApiEndpoint(
+            protocol="https",
+            port=443,
+            endpoint="192.168.1.1",
+            session=mock_session,
+            verify_ssl=False,
+        )
+
+        await endpoint.request("getStatusEx")
+
+        mock_session.get.assert_called_with(
+            "https://192.168.1.1/httpapi.asp?command=getStatusEx",
+            timeout=ANY,
+            ssl=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_close_owned_session(self, mock_session):
+        """Test owned sessions are closed by the endpoint."""
+        mock_session.closed = False
+        mock_session.close = AsyncMock()
+        endpoint = WiimApiEndpoint(
+            protocol="https",
+            port=443,
+            endpoint="192.168.1.1",
+            session=mock_session,
+            owns_session=True,
+        )
+
+        await endpoint.async_close()
+
+        mock_session.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_json_request_ok(self, mock_session):
         """Test a successful request that returns JSON."""
         mock_session.get.return_value.__aenter__.return_value.json = AsyncMock(

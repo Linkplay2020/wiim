@@ -20,6 +20,10 @@ from .consts import (
     CMD_TO_MODE_MAP,
     SDK_LOGGER,
     MANUFACTURER_WIIM,
+    PLAY_MEDIUMS_CTRL,
+    SUPPORTED_INPUT_MODES_BY_MODEL,
+    SUPPORTED_OUTPUT_MODES_BY_MODEL,
+    TRACK_SOURCES_CTRL,
     UPNP_AV_TRANSPORT_SERVICE_ID,
     UPNP_RENDERING_CONTROL_SERVICE_ID,
     UPNP_WIIM_PLAY_QUEUE_SERVICE_ID,
@@ -39,11 +43,22 @@ from .consts import (
     WiimHttpCommand,
     UPNP_TIMEOUT_TIME,
     AUDIO_AUX_MODE_IDS,
+    VALID_PLAY_MEDIUMS,
+    wiimDeviceType,
 )
 from .endpoint import WiimApiEndpoint
 from .exceptions import WiimDeviceException, WiimRequestException
 from .handler import parse_last_change_event
 from .manufacturers import get_info_from_project
+from .models import (
+    WiimLoopState,
+    WiimMediaMetadata,
+    WiimPreset,
+    WiimQueueItem,
+    WiimQueueSnapshot,
+    WiimRepeatMode,
+    WiimTransportCapabilities,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -74,7 +89,7 @@ class WiimDevice:
         upnp_device: UpnpDevice,
         session: ClientSession,
         http_api_endpoint: WiimApiEndpoint | None = None,
-        ha_host_ip: str | None = None,
+        local_host: str | None = None,
         polling_interval: int = DEFAULT_AVAILABILITY_POLLING_INTERVAL,
     ):
         """Initialize the WiiM device."""
@@ -128,7 +143,7 @@ class WiimDevice:
         if hasattr(self.upnp_device, "requester") and self.upnp_device.requester:
             self.requester_for_eventing = self.upnp_device.requester  # type: ignore
 
-        self.ha_host_ip = ha_host_ip
+        self.local_host = local_host
         self.volume: int = 0
         self.is_muted: bool = False
         self.playing_status: PlayingStatus = PlayingStatus.STOPPED
@@ -156,6 +171,20 @@ class WiimDevice:
         self._polling_interval = polling_interval
         self._polling_task: asyncio.Task | None = None
 
+    def _supported_model_name(self) -> str | None:
+        """Return the best model name available for capability lookups."""
+        model_name = self.model_name
+        if (
+            model_name in SUPPORTED_INPUT_MODES_BY_MODEL
+            or model_name in SUPPORTED_OUTPUT_MODES_BY_MODEL
+        ):
+            return model_name
+
+        if self._udn.startswith("uuid:") and len(self._udn) >= 13:
+            return wiimDeviceType.get(self._udn[5:13], model_name)
+
+        return model_name
+
     async def async_init_services_and_subscribe(self) -> bool:
         """
         Initialize UPnP services and subscribe to events.
@@ -165,7 +194,7 @@ class WiimDevice:
         if self.requester_for_eventing:
             try:
                 loop = asyncio.get_event_loop()
-                local_ip = self.ha_host_ip
+                local_ip = self.local_host
                 device_ip = self.ip_address
                 if device_ip:
                     last_octet = int(device_ip.split(".")[-1])
@@ -910,6 +939,9 @@ class WiimDevice:
                     "albumArtURI": self.make_absolute_url(  # noqa: SLF001
                         meta.get("albumArtURI")
                     ),
+                    "album_art_uri": self.make_absolute_url(  # noqa: SLF001
+                        meta.get("albumArtURI")
+                    ),
                 }
 
             except Exception as e:
@@ -1295,6 +1327,42 @@ class WiimDevice:
         )
         self.loop_mode = loop
 
+    async def async_get_transport_capabilities(self) -> WiimTransportCapabilities:
+        """Return normalized transport capabilities for the current media context."""
+        if not self.supports_http_api:
+            return WiimTransportCapabilities()
+
+        media_info = await self.async_set_AVT_cmd(WiimHttpCommand.MEDIA_INFO)
+        if not isinstance(media_info, dict):
+            return WiimTransportCapabilities()
+
+        play_medium = media_info.get("PlayMedium")
+        if not isinstance(play_medium, str):
+            play_medium = ""
+
+        track_source = media_info.get("TrackSource")
+        if not isinstance(track_source, str):
+            track_source = ""
+
+        can_next = True
+        can_previous = True
+        if play_medium in PLAY_MEDIUMS_CTRL:
+            can_next = False
+            can_previous = False
+        elif track_source in TRACK_SOURCES_CTRL:
+            can_previous = False
+
+        loop_supported = play_medium in VALID_PLAY_MEDIUMS and track_source != ""
+
+        return WiimTransportCapabilities(
+            can_next=can_next,
+            can_previous=can_previous,
+            can_repeat=loop_supported,
+            can_shuffle=loop_supported,
+            play_medium=play_medium,
+            track_source=track_source,
+        )
+
     async def async_play_queue_with_index(self, index: int) -> None:
         """Set loop/repeat mode using UPnP."""
         await self._invoke_upnp_action(
@@ -1341,6 +1409,26 @@ class WiimDevice:
         except WiimDeviceException:
             return []
 
+    async def async_get_presets(self) -> tuple[WiimPreset, ...]:
+        """Return normalized presets for browsing."""
+        presets = await self.async_get_favorites()
+        results: list[WiimPreset] = []
+        for item in presets:
+            preset_id = item.get("uri")
+            if not preset_id or not str(preset_id).isdigit():
+                continue
+
+            preset_name = item.get("name", "")
+            title = preset_name.split("_#~", 1)[0] if "_#~" in preset_name else preset_name
+            results.append(
+                WiimPreset(
+                    preset_id=int(preset_id),
+                    title=title,
+                    image_url=item.get("image_url"),
+                )
+            )
+        return tuple(results)
+
     def _parse_preset_data(self, xml_str: str) -> list:
         """Parse queue data from PlayQueue service (needs actual format)."""
         try:
@@ -1384,6 +1472,60 @@ class WiimDevice:
             return self._parse_queue_data(result.get("QueueContext", ""))
         except WiimDeviceException:
             return []
+
+    async def async_get_queue_snapshot(self) -> WiimQueueSnapshot:
+        """Return normalized queue information for browsing."""
+        queue_items = await self.async_get_queue_items()
+        source_name = next(
+            (
+                item["SourceName"]
+                for item in queue_items
+                if isinstance(item, dict) and "SourceName" in item
+            ),
+            None,
+        )
+
+        media_info = await self.async_set_AVT_cmd(WiimHttpCommand.MEDIA_INFO)
+        if not isinstance(media_info, dict):
+            return WiimQueueSnapshot(items=(), source_name=source_name)
+
+        play_medium = media_info.get("PlayMedium")
+        if not isinstance(play_medium, str):
+            play_medium = ""
+
+        track_source = media_info.get("TrackSource")
+        if not isinstance(track_source, str):
+            track_source = ""
+
+        browseable = (
+            play_medium in VALID_PLAY_MEDIUMS
+            and track_source != ""
+            and (
+                source_name is None
+                or source_name == "MyFavouriteQueue"
+                or track_source in source_name
+            )
+        )
+
+        normalized_items = tuple(
+            WiimQueueItem(
+                queue_index=int(item["uri"]),
+                title=item["name"],
+                image_url=item.get("image_url"),
+            )
+            for item in queue_items
+            if isinstance(item, dict)
+            and str(item.get("uri", "")).isdigit()
+            and "name" in item
+        )
+
+        return WiimQueueSnapshot(
+            items=normalized_items,
+            source_name=source_name,
+            play_medium=play_medium,
+            track_source=track_source,
+            is_active=browseable,
+        )
 
     def _parse_queue_data(self, xml_str: str) -> list:
         """Parse queue data from PlayQueue service (needs actual format)."""
@@ -1473,6 +1615,40 @@ class WiimDevice:
         )
 
     @property
+    def supported_input_modes(self) -> tuple[str, ...]:
+        """Return the supported input mode display names for the device."""
+        model_name = self._supported_model_name()
+        if not model_name:
+            return ()
+
+        modes_flag = SUPPORTED_INPUT_MODES_BY_MODEL.get(model_name)
+        if modes_flag is None:
+            return ()
+
+        return tuple(
+            mode.display_name  # type: ignore[attr-defined]
+            for mode in InputMode
+            if modes_flag & mode.value
+        )
+
+    @property
+    def supported_output_modes(self) -> tuple[str, ...]:
+        """Return the supported output mode display names for the device."""
+        model_name = self._supported_model_name()
+        if not model_name:
+            return ()
+
+        modes_flag = SUPPORTED_OUTPUT_MODES_BY_MODEL.get(model_name)
+        if modes_flag is None:
+            return ()
+
+        return tuple(
+            mode.display_name  # type: ignore[attr-defined]
+            for mode in AudioOutputHwMode
+            if modes_flag & mode.value
+        )
+
+    @property
     def firmware_version(self) -> str | None:
         """Return the firmware version from HTTP API."""
         if hasattr(self, "_device_info_properties") and self._device_info_properties:
@@ -1519,7 +1695,83 @@ class WiimDevice:
     @property
     def album_art_uri(self) -> str | None:
         """Return the current track's album art URI."""
-        return self.current_track_info.get("album_art_uri")
+        if media := self.current_media:
+            return media.image_url
+        return None
+
+    @property
+    def current_media(self) -> WiimMediaMetadata | None:
+        """Return normalized current media metadata."""
+        if not self.current_track_info:
+            return None
+
+        return WiimMediaMetadata(
+            title=self.current_track_info.get("title"),
+            artist=self.current_track_info.get("artist"),
+            album=self.current_track_info.get("album"),
+            image_url=self.current_track_info.get("albumArtURI")
+            or self.current_track_info.get("album_art_uri"),
+            uri=self.current_track_info.get("uri"),
+            duration=self.current_track_duration or self.current_track_info.get(
+                "duration"
+            ),
+            position=self.current_position,
+        )
+
+    @property
+    def loop_state(self) -> WiimLoopState:
+        """Return normalized repeat/shuffle settings for the current loop mode."""
+        mapping = {
+            LoopMode.SHUFFLE_DISABLE_REPEAT_ALL: WiimLoopState(
+                repeat=WiimRepeatMode.ALL,
+                shuffle=False,
+            ),
+            LoopMode.SHUFFLE_DISABLE_REPEAT_ONE: WiimLoopState(
+                repeat=WiimRepeatMode.ONE,
+                shuffle=False,
+            ),
+            LoopMode.SHUFFLE_ENABLE_REPEAT_ALL: WiimLoopState(
+                repeat=WiimRepeatMode.ALL,
+                shuffle=True,
+            ),
+            LoopMode.SHUFFLE_ENABLE_REPEAT_NONE: WiimLoopState(
+                repeat=WiimRepeatMode.OFF,
+                shuffle=True,
+            ),
+            LoopMode.SHUFFLE_DISABLE_REPEAT_NONE: WiimLoopState(
+                repeat=WiimRepeatMode.OFF,
+                shuffle=False,
+            ),
+            LoopMode.SHUFFLE_ENABLE_REPEAT_ONE: WiimLoopState(
+                repeat=WiimRepeatMode.ONE,
+                shuffle=True,
+            ),
+        }
+        return mapping.get(
+            self.loop_mode,
+            WiimLoopState(repeat=WiimRepeatMode.OFF, shuffle=False),
+        )
+
+    @staticmethod
+    def build_loop_mode(repeat: WiimRepeatMode, shuffle: bool) -> LoopMode:
+        """Return the SDK loop mode for the given repeat and shuffle settings."""
+        if repeat == WiimRepeatMode.ALL:
+            return (
+                LoopMode.SHUFFLE_ENABLE_REPEAT_ALL
+                if shuffle
+                else LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
+            )
+        if repeat == WiimRepeatMode.ONE:
+            return (
+                LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
+                if shuffle
+                else LoopMode.SHUFFLE_DISABLE_REPEAT_ONE
+            )
+        return (
+            LoopMode.SHUFFLE_ENABLE_REPEAT_NONE
+            if shuffle
+            else LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
+        )
 
     @property
     def manufacturer(self) -> str | None:
@@ -1766,6 +2018,19 @@ class WiimDevice:
                     err,
                     exc_info=True,
                 )
+
+        if self._http_api:
+            try:
+                await self._http_api.async_close()
+            except Exception as err:
+                self.logger.warning(
+                    "Device %s: Error closing HTTP API session: %s",
+                    self.name,
+                    err,
+                    exc_info=True,
+                )
+            finally:
+                self._http_api = None
 
         self._event_handler_started = False
         self._available = False
