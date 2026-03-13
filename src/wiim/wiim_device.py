@@ -9,6 +9,7 @@ from datetime import timedelta
 import xml.etree.ElementTree as ET
 from html import unescape
 from contextlib import suppress
+import time
 import json
 
 from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
@@ -170,6 +171,15 @@ class WiimDevice:
 
         self._polling_interval = polling_interval
         self._polling_task: asyncio.Task | None = None
+        self._last_upnp_event_ts: float | None = None
+
+    def _mark_upnp_event_received(self) -> None:
+        """Record the time of the latest UPnP event to reduce polling."""
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            now = time.monotonic()
+        self._last_upnp_event_ts = now
 
     def _supported_model_name(self) -> str | None:
         """Return the best model name available for capability lookups."""
@@ -536,6 +546,7 @@ class WiimDevice:
                 "Device: No LastChange in PlayQueue event or value is None."
             )
             return
+        self._mark_upnp_event_received()
 
         try:
             event_data = parse_last_change_event(str(last_change_sv.value), SDK_LOGGER)
@@ -578,6 +589,7 @@ class WiimDevice:
                 "Device: No LastChange in PlayQueue event or value is None."
             )
             return
+        self._mark_upnp_event_received()
 
         try:
             event_data = parse_last_change_event(str(last_change_sv.value), SDK_LOGGER)
@@ -721,6 +733,7 @@ class WiimDevice:
                 "Device: No LastChange in PlayQueue event or value is None."
             )
             return
+        self._mark_upnp_event_received()
 
         try:
             event_data = parse_last_change_event(str(last_change_sv.value), SDK_LOGGER)
@@ -2054,6 +2067,16 @@ class WiimDevice:
         while True:
             try:
                 await asyncio.sleep(self._polling_interval)
+                loop = asyncio.get_running_loop()
+                if self._last_upnp_event_ts is not None:
+                    since_event = loop.time() - self._last_upnp_event_ts
+                    if since_event < self._polling_interval:
+                        self.logger.debug(
+                            "Device %s: Skipping polling due to recent UPnP event (%.1fs ago).",
+                            self.name,
+                            since_event,
+                        )
+                        continue
 
                 if not self._http_api:
                     self.logger.debug(
@@ -2073,6 +2096,7 @@ class WiimDevice:
                         self._available,
                     )
                     if self.general_event_callback:
+                        self._available = True
                         self.general_event_callback(self)
 
             except WiimRequestException as e:
@@ -2083,12 +2107,9 @@ class WiimDevice:
                         e,
                     )
 
-                    # await self.disconnect()
-
                     if self.general_event_callback:
-                        # asyncio.create_task(self.general_event_callback(self))
+                        self._available = False
                         self.general_event_callback(self)
-                    # self._available = False
 
                 else:
                     self.logger.debug(
@@ -2112,11 +2133,9 @@ class WiimDevice:
                         self.name,
                     )
 
-                    # await self.disconnect()
-
                     if self.general_event_callback:
+                        self._available = False
                         self.general_event_callback(self)
-                    # self._available = False
 
     def _start_polling(self) -> None:
         """Ensure the polling task is running; if not, start it and attach restart callback."""
@@ -2129,18 +2148,7 @@ class WiimDevice:
 
     def _on_polling_done(self, fut: asyncio.Task) -> None:
         """Called whenever the polling task finishes."""
-        # try:
-        #     exc = fut.exception()
-        #     if exc:
-        #         self.logger.warning(
-        #             "Device %s: Polling task terminated with exception: %s",
-        #             self.name,
-        #             exc,
-        #         )
-        # except asyncio.CancelledError:
-        #     self.logger.debug("Device %s: Polling task was cancelled.", self.name)
         self.logger.info("Device %s: Restarting polling task.", self.name)
-        # asyncio.get_running_loop().call_later(1, self._start_polling)
 
     async def async_stop_polling(self) -> None:
         """Clean up on unloading the integration."""
