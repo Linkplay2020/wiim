@@ -1349,6 +1349,12 @@ class WiimDevice:
         if not isinstance(media_info, dict):
             return WiimTransportCapabilities()
 
+        positon_str = media_info.get("RelTime")
+        if positon_str:
+            position = self.parse_duration(positon_str)
+            position = max(position, 0)
+            self.current_position = position
+
         play_medium = media_info.get("PlayMedium")
         if not isinstance(play_medium, str):
             play_medium = ""
