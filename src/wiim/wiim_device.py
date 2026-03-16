@@ -1349,12 +1349,6 @@ class WiimDevice:
         if not isinstance(media_info, dict):
             return WiimTransportCapabilities()
 
-        positon_str = media_info.get("RelTime")
-        if positon_str:
-            position = self.parse_duration(positon_str)
-            position = max(position, 0)
-            self.current_position = position
-
         play_medium = media_info.get("PlayMedium")
         if not isinstance(play_medium, str):
             play_medium = ""
@@ -1865,6 +1859,15 @@ class WiimDevice:
         self.output_mode = self.sound_mode
 
         return self.sound_mode
+
+    async def async_get_current_media(self) -> WiimMediaMetadata | None:
+        """Sync device position then return metadata."""
+        if not self.current_track_info:
+            return None
+
+        await self.sync_device_duration_and_position()
+
+        return self.current_media
 
     async def sync_device_duration_and_position(self) -> None:
         try:
