@@ -11,7 +11,47 @@ from wiim.consts import (
     WiimHttpCommand,
     InputMode,
 )
-from wiim.models import WiimRepeatMode
+from wiim.models import WiimGroupRole, WiimGroupSnapshot, WiimRepeatMode
+
+
+def _build_upnp_device(
+    *,
+    udn: str,
+    name: str,
+    model_name: str = "WiiM Pro",
+    ip_address: str = "192.168.1.100",
+):
+    """Build a standalone mocked UPnP device for WiimDevice tests."""
+    upnp_device = MagicMock()
+    upnp_device.udn = udn
+    upnp_device.friendly_name = name
+    upnp_device.manufacturer = "Linkplay"
+    upnp_device.model_name = model_name
+    upnp_device.device_url = f"http://{ip_address}:49152/description.xml"
+
+    def _build_service():
+        service = MagicMock()
+        service.has_action.return_value = True
+        actions: dict[str, AsyncMock] = {}
+
+        def action_selector(action_name: str):
+            action = actions.get(action_name)
+            if action is None:
+                action = AsyncMock()
+                actions[action_name] = action
+            return action
+
+        service.action.side_effect = action_selector
+        return service
+
+    services = {
+        "urn:schemas-upnp-org:service:AVTransport:1": _build_service(),
+        "urn:schemas-upnp-org:service:RenderingControl:1": _build_service(),
+        "urn:wiimu-com:service:PlayQueue:1": _build_service(),
+    }
+    upnp_device.service.side_effect = lambda service_id: services.get(service_id)
+    upnp_device.requester = MagicMock()
+    return upnp_device
 
 
 @patch("wiim.wiim_device.AiohttpNotifyServer", MagicMock())
@@ -246,3 +286,152 @@ class TestWiimDevice:
         assert len(snapshot.items) == 2
         assert snapshot.items[0].queue_index == 1
         assert snapshot.items[0].title == "Track One"
+
+    @pytest.mark.asyncio
+    async def test_follower_reads_grouped_state_from_leader(self, mock_session):
+        """Test grouped follower reads transparently resolve through the leader."""
+        leader = WiimDevice(
+            _build_upnp_device(
+                udn="uuid:leader-1234",
+                name="Leader WiiM Device",
+                model_name="WiiM Pro",
+                ip_address="192.168.1.101",
+            ),
+            mock_session,
+        )
+        follower = WiimDevice(
+            _build_upnp_device(
+                udn="uuid:follower-5678",
+                name="Follower WiiM Device",
+                model_name="Unknown Follower",
+                ip_address="192.168.1.102",
+            ),
+            mock_session,
+        )
+        controller = MagicMock()
+        controller.get_group_snapshot.side_effect = lambda udn: (
+            WiimGroupSnapshot(
+                role=WiimGroupRole.FOLLOWER,
+                leader_udn=leader.udn,
+                member_udns=(leader.udn, follower.udn),
+            )
+            if udn == follower.udn
+            else WiimGroupSnapshot(
+                role=WiimGroupRole.STANDALONE,
+                leader_udn=leader.udn,
+                member_udns=(leader.udn,),
+            )
+        )
+        controller.get_device.side_effect = lambda udn: (
+            leader if udn == leader.udn else follower
+        )
+        leader.attach_controller(controller)
+        follower.attach_controller(controller)
+
+        leader.playing_status = PlayingStatus.PLAYING
+        leader.play_mode = "Spotify"
+        leader.output_mode = "speaker"
+        leader.loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
+        leader.current_track_info = {
+            "title": "Leader Song",
+            "artist": "Leader Artist",
+            "album": "Leader Album",
+            "uri": "https://example.com/leader.mp3",
+        }
+        leader.current_track_duration = 215
+        leader.current_position = 42
+        leader._supported_model_name = MagicMock(return_value="WiiM Pro")
+        follower._supported_model_name = MagicMock(return_value=None)
+        leader._http_api = AsyncMock(spec=WiimApiEndpoint)
+        follower._http_api = None
+        leader.async_set_AVT_cmd = AsyncMock(
+            return_value={
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+            }
+        )
+        follower.async_set_AVT_cmd = AsyncMock()
+
+        assert follower.playing_status == PlayingStatus.PLAYING
+        assert follower.play_mode == "Spotify"
+        assert follower.output_mode == "speaker"
+        assert follower.loop_state.repeat == WiimRepeatMode.ONE
+        assert follower.loop_state.shuffle is True
+        assert follower.current_media is not None
+        assert follower.current_media.title == "Leader Song"
+        assert follower.current_media.album == "Leader Album"
+        assert follower.current_media.duration == 215
+        assert follower.current_media.position == 42
+        assert follower.supported_input_modes == leader.supported_input_modes
+        assert follower.supports_http_api is True
+
+        capabilities = await follower.async_get_transport_capabilities()
+
+        assert capabilities.can_previous is False
+        assert capabilities.can_repeat is True
+        follower.async_set_AVT_cmd.assert_not_called()
+        leader.async_set_AVT_cmd.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_follower_forwards_commands_except_volume_and_mute(
+        self, mock_session
+    ):
+        """Test grouped commands route to the leader except volume and mute."""
+        leader = WiimDevice(
+            _build_upnp_device(
+                udn="uuid:leader-1234",
+                name="Leader WiiM Device",
+                ip_address="192.168.1.101",
+            ),
+            mock_session,
+        )
+        follower = WiimDevice(
+            _build_upnp_device(
+                udn="uuid:follower-5678",
+                name="Follower WiiM Device",
+                ip_address="192.168.1.102",
+            ),
+            mock_session,
+        )
+        controller = MagicMock()
+        controller.get_group_snapshot.side_effect = lambda udn: (
+            WiimGroupSnapshot(
+                role=WiimGroupRole.FOLLOWER,
+                leader_udn=leader.udn,
+                member_udns=(leader.udn, follower.udn),
+            )
+            if udn == follower.udn
+            else WiimGroupSnapshot(
+                role=WiimGroupRole.STANDALONE,
+                leader_udn=leader.udn,
+                member_udns=(leader.udn,),
+            )
+        )
+        controller.get_device.side_effect = lambda udn: (
+            leader if udn == leader.udn else follower
+        )
+        leader.attach_controller(controller)
+        follower.attach_controller(controller)
+
+        follower.async_play = AsyncMock(wraps=follower.async_play)
+        leader.async_play = AsyncMock(wraps=leader.async_play)
+        follower.async_seek = AsyncMock(wraps=follower.async_seek)
+        leader.async_seek = AsyncMock(wraps=leader.async_seek)
+        follower.async_set_volume = AsyncMock(wraps=follower.async_set_volume)
+        leader.async_set_volume = AsyncMock(wraps=leader.async_set_volume)
+        follower.async_set_mute = AsyncMock(wraps=follower.async_set_mute)
+        leader.async_set_mute = AsyncMock(wraps=leader.async_set_mute)
+
+        await follower.async_play()
+        await follower.async_seek(90)
+        await follower.async_set_volume(35)
+        await follower.async_set_mute(True)
+
+        follower.async_play.assert_awaited_once()
+        leader.async_play.assert_awaited_once()
+        follower.async_seek.assert_awaited_once_with(90)
+        leader.async_seek.assert_awaited_once_with(90)
+        follower.async_set_volume.assert_awaited_once_with(35)
+        follower.async_set_mute.assert_awaited_once_with(True)
+        leader.async_set_volume.assert_not_awaited()
+        leader.async_set_mute.assert_not_awaited()

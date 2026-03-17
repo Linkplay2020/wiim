@@ -52,6 +52,7 @@ from .exceptions import WiimDeviceException, WiimRequestException
 from .handler import parse_last_change_event
 from .manufacturers import get_info_from_project
 from .models import (
+    WiimGroupRole,
     WiimLoopState,
     WiimMediaMetadata,
     WiimPreset,
@@ -64,6 +65,8 @@ from .models import (
 if TYPE_CHECKING:
     from aiohttp import ClientSession
     from async_upnp_client.client import UpnpRequester
+
+    from .controller import WiimController
 
 DEFAULT_AVAILABILITY_POLLING_INTERVAL = 60
 
@@ -147,17 +150,17 @@ class WiimDevice:
         self.local_host = local_host
         self.volume: int = 0
         self.is_muted: bool = False
-        self.playing_status: PlayingStatus = PlayingStatus.STOPPED
+        self._playing_status: PlayingStatus = PlayingStatus.STOPPED
         self.current_track_info: dict[str, Any] = {}
         self.current_track_uri: str | None = None
-        self.play_mode: str
+        self._play_mode: str = ""
         self.input_source: str
         self.loop_mode: LoopMode = LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
         self.equalizer_mode: EqualizerMode = EqualizerMode.NONE
         self.current_position: int = 0
         self.current_track_duration: int = 0
         self.next_track_uri: str | None = None
-        self.output_mode: str | None = None
+        self._output_mode: str | None = None
         self.input_mode: InputMode = InputMode.WIFI
         self.slave_action: str | None = None
         self.slave_udn: str | None = None
@@ -168,6 +171,7 @@ class WiimDevice:
         self._available: bool = True
         self._cancel_event_renewal: asyncio.TimerHandle | None = None
         self._event_handler_started: bool = False
+        self._controller: WiimController | None = None
 
         self._polling_interval = polling_interval
         self._polling_task: asyncio.Task | None = None
@@ -194,6 +198,62 @@ class WiimDevice:
             return wiimDeviceType.get(self._udn[5:13], model_name)
 
         return model_name
+
+    def attach_controller(self, controller: WiimController | None) -> None:
+        """Attach or detach the managing controller for group-aware behavior."""
+        self._controller = controller
+
+    def _resolve_group_device(
+        self,
+        *,
+        for_commands: bool,
+        reason: str,
+    ) -> WiimDevice:
+        """Return the effective grouped target for state reads or commands."""
+        if self._controller is None:
+            return self
+
+        try:
+            group_snapshot = self._controller.get_group_snapshot(self.udn)
+        except ValueError:
+            return self
+
+        if group_snapshot.role != WiimGroupRole.FOLLOWER:
+            return self
+
+        target_udn = (
+            group_snapshot.command_target_udn
+            if for_commands
+            else group_snapshot.leader_udn
+        )
+        if target_udn == self.udn:
+            return self
+
+        try:
+            return self._controller.get_device(target_udn)
+        except ValueError:
+            self.logger.debug(
+                "Device %s: Could not resolve grouped %s target %s, using local device",
+                self.name,
+                reason,
+                target_udn,
+            )
+            return self
+
+    def _state_source_device(self) -> WiimDevice:
+        """Return the device whose playback state should back this device."""
+        return self._resolve_group_device(for_commands=False, reason="state")
+
+    def _command_target_device(self) -> WiimDevice:
+        """Return the device that should receive grouped control commands."""
+        return self._resolve_group_device(for_commands=True, reason="command")
+
+    def _notify_group_followers(self) -> None:
+        """Fan out leader state changes to grouped followers."""
+        if self._controller is None:
+            return
+
+        self._controller.notify_group_state_change(self)
 
     async def async_init_services_and_subscribe(self) -> bool:
         """
@@ -573,6 +633,8 @@ class WiimDevice:
                     exc_info=True,
                 )
 
+        self._notify_group_followers()
+
     def _internal_handle_rendering_control_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
     ) -> None:
@@ -717,6 +779,8 @@ class WiimDevice:
                         exc_info=True,
                     )
 
+        self._notify_group_followers()
+
     def _internal_handle_play_queue_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
     ) -> None:
@@ -778,6 +842,8 @@ class WiimDevice:
                     exc_info=True,
                 )
 
+        self._notify_group_followers()
+
     def get_display_name_by_command_str(self, command_str: str) -> str | None:
         """Helper to get display name from command string for AudioOutputHwMode."""
         for mode in AudioOutputHwMode:
@@ -826,10 +892,10 @@ class WiimDevice:
                 "NO_MEDIA_PRESENT": PlayingStatus.STOPPED,
             }
             self.playing_status = state_map.get(
-                event_data["TransportState"], self.playing_status
+                event_data["TransportState"], self._playing_status
             )
             self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
-                self.playing_status.value
+                self._playing_status.value
             )
         
         if "CurrentTrackURI" in event_data:
@@ -1053,7 +1119,7 @@ class WiimDevice:
                     http_playing_status = _PLAYER_TO_PLAYING.get(
                         ps, PlayingStatus.UNKNOWN
                     )
-                    if self.playing_status != http_playing_status:
+                    if self._playing_status != http_playing_status:
                         self.playing_status = http_playing_status
                 except ValueError:
                     self.logger.warning(
@@ -1184,6 +1250,11 @@ class WiimDevice:
         Start playback. If URI is provided, plays that URI. Otherwise, resumes.
         Metadata is typically DIDL-Lite XML string.
         """
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_play(uri, metadata)
+            return
+
         if uri:
             didl_metadata = (
                 metadata
@@ -1200,24 +1271,49 @@ class WiimDevice:
 
     async def async_pause(self) -> None:
         """Pause playback."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_pause()
+            return
+
         await self._invoke_upnp_action("AVTransport", "Pause")
         self.playing_status = PlayingStatus.PAUSED
 
     async def async_stop(self) -> None:
         """Stop playback."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_stop()
+            return
+
         await self._invoke_upnp_action("AVTransport", "Stop")
         self.playing_status = PlayingStatus.STOPPED
 
     async def async_next(self) -> None:
         """Play next track."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_next()
+            return
+
         await self._invoke_upnp_action("AVTransport", "Next")
 
     async def async_previous(self) -> None:
         """Play previous track."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_previous()
+            return
+
         await self._invoke_upnp_action("AVTransport", "Previous")
 
     async def async_seek(self, position_seconds: int) -> None:
         """Seek to a position in the current track (in seconds)."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_seek(position_seconds)
+            return
+
         time_str = self._format_duration(position_seconds)
         await self._invoke_upnp_action(
             "AVTransport", "Seek", Unit="REL_TIME", Target=time_str
@@ -1255,6 +1351,11 @@ class WiimDevice:
 
     async def async_set_play_mode(self, input_mode: str) -> None:
         """Set the playback source/mode using HTTP API."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_set_play_mode(input_mode)
+            return
+
         DISPLAY_TO_COMMAND = {
             mode.display_name: mode.command_name  # type: ignore[attr-defined]
             for mode in InputMode  # type: ignore[attr-defined]
@@ -1293,6 +1394,11 @@ class WiimDevice:
             )
 
     async def async_set_output_mode(self, output_mode: str) -> None:
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_set_output_mode(output_mode)
+            return
+
         DISPLAY_TO_COMMAND = {mode.display_name: mode.cmd for mode in AudioOutputHwMode}  # type: ignore[attr-defined]
 
         http_mode_val = DISPLAY_TO_COMMAND[output_mode]
@@ -1335,6 +1441,11 @@ class WiimDevice:
 
     async def async_set_loop_mode(self, loop: LoopMode) -> None:
         """Set loop/repeat mode using UPnP."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_set_loop_mode(loop)
+            return
+
         await self._invoke_upnp_action(
             "PlayQueue", "SetQueueLoopMode", LoopMode=int(loop)
         )
@@ -1342,6 +1453,10 @@ class WiimDevice:
 
     async def async_get_transport_capabilities(self) -> WiimTransportCapabilities:
         """Return normalized transport capabilities for the current media context."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            return await target_device.async_get_transport_capabilities()
+
         if not self.supports_http_api:
             return WiimTransportCapabilities()
 
@@ -1378,12 +1493,22 @@ class WiimDevice:
 
     async def async_play_queue_with_index(self, index: int) -> None:
         """Set loop/repeat mode using UPnP."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_play_queue_with_index(index)
+            return
+
         await self._invoke_upnp_action(
             "PlayQueue", "PlayQueueWithIndex", QueueName="CurrentQueue", Index=index
         )
 
     async def async_set_equalizer_mode(self, eq_mode: EqualizerMode) -> None:
         """Set equalizer mode using HTTP API."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.async_set_equalizer_mode(eq_mode)
+            return
+
         if self._manufacturer == MANUFACTURER_WIIM and self._http_api:
             try:
                 self.equalizer_mode = eq_mode
@@ -1411,6 +1536,10 @@ class WiimDevice:
 
     async def async_get_favorites(self) -> list:
         """Get Presets from the PlayQueue service (speculative)."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            return await target_device.async_get_favorites()
+
         if not self.play_queue_service:
             self.logger.warning(
                 "Device %s: PlayQueue service not available.", self.name
@@ -1424,6 +1553,10 @@ class WiimDevice:
 
     async def async_get_presets(self) -> tuple[WiimPreset, ...]:
         """Return normalized presets for browsing."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            return await target_device.async_get_presets()
+
         presets = await self.async_get_favorites()
         results: list[WiimPreset] = []
         for item in presets:
@@ -1473,6 +1606,10 @@ class WiimDevice:
 
     async def async_get_queue_items(self) -> list:
         """Get items from the PlayQueue service (speculative)."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            return await target_device.async_get_queue_items()
+
         if not self.play_queue_service:
             self.logger.warning(
                 "Device %s: PlayQueue service not available.", self.name
@@ -1488,6 +1625,10 @@ class WiimDevice:
 
     async def async_get_queue_snapshot(self) -> WiimQueueSnapshot:
         """Return normalized queue information for browsing."""
+        target_device = self._command_target_device()
+        if target_device is not self:
+            return await target_device.async_get_queue_snapshot()
+
         queue_items = await self.async_get_queue_items()
         source_name = next(
             (
@@ -1630,7 +1771,8 @@ class WiimDevice:
     @property
     def supported_input_modes(self) -> tuple[str, ...]:
         """Return the supported input mode display names for the device."""
-        model_name = self._supported_model_name()
+        target_device = self._command_target_device()
+        model_name = target_device._supported_model_name()
         if not model_name:
             return ()
 
@@ -1647,7 +1789,8 @@ class WiimDevice:
     @property
     def supported_output_modes(self) -> tuple[str, ...]:
         """Return the supported output mode display names for the device."""
-        model_name = self._supported_model_name()
+        target_device = self._command_target_device()
+        model_name = target_device._supported_model_name()
         if not model_name:
             return ()
 
@@ -1693,6 +1836,45 @@ class WiimDevice:
         return str(self._http_api) if self._http_api else None
 
     @property
+    def playing_status(self) -> PlayingStatus:
+        """Return grouped playback status."""
+        state_device = self._state_source_device()
+        if state_device is not self:
+            return state_device.playing_status
+        return self._playing_status
+
+    @playing_status.setter
+    def playing_status(self, status: PlayingStatus) -> None:
+        """Store the local playback status for this device."""
+        self._playing_status = status
+
+    @property
+    def play_mode(self) -> str:
+        """Return grouped input/play mode."""
+        state_device = self._state_source_device()
+        if state_device is not self:
+            return state_device.play_mode
+        return self._play_mode
+
+    @play_mode.setter
+    def play_mode(self, mode: str) -> None:
+        """Store the local input/play mode for this device."""
+        self._play_mode = mode
+
+    @property
+    def output_mode(self) -> str | None:
+        """Return grouped audio output mode."""
+        state_device = self._state_source_device()
+        if state_device is not self:
+            return state_device.output_mode
+        return self._output_mode
+
+    @output_mode.setter
+    def output_mode(self, mode: str | None) -> None:
+        """Store the local audio output mode for this device."""
+        self._output_mode = mode
+
+    @property
     def available(self) -> bool:
         """Return True if the device is considered available."""
         upnp_dev_available = True
@@ -1715,25 +1897,28 @@ class WiimDevice:
     @property
     def current_media(self) -> WiimMediaMetadata | None:
         """Return normalized current media metadata."""
-        if not self.current_track_info:
+        state_device = self._state_source_device()
+        if not state_device.current_track_info:
             return None
 
         return WiimMediaMetadata(
-            title=self.current_track_info.get("title"),
-            artist=self.current_track_info.get("artist"),
-            album=self.current_track_info.get("album"),
-            image_url=self.current_track_info.get("albumArtURI")
-            or self.current_track_info.get("album_art_uri"),
-            uri=self.current_track_info.get("uri"),
-            duration=self.current_track_duration or self.current_track_info.get(
+            title=state_device.current_track_info.get("title"),
+            artist=state_device.current_track_info.get("artist"),
+            album=state_device.current_track_info.get("album"),
+            image_url=state_device.current_track_info.get("albumArtURI")
+            or state_device.current_track_info.get("album_art_uri"),
+            uri=state_device.current_track_info.get("uri"),
+            duration=state_device.current_track_duration
+            or state_device.current_track_info.get(
                 "duration"
             ),
-            position=self.current_position,
+            position=state_device.current_position,
         )
 
     @property
     def loop_state(self) -> WiimLoopState:
         """Return normalized repeat/shuffle settings for the current loop mode."""
+        loop_mode = self._state_source_device().loop_mode
         mapping = {
             LoopMode.SHUFFLE_DISABLE_REPEAT_ALL: WiimLoopState(
                 repeat=WiimRepeatMode.ALL,
@@ -1761,7 +1946,7 @@ class WiimDevice:
             ),
         }
         return mapping.get(
-            self.loop_mode,
+            loop_mode,
             WiimLoopState(repeat=WiimRepeatMode.OFF, shuffle=False),
         )
 
@@ -1800,12 +1985,16 @@ class WiimDevice:
 
     @property
     def supports_http_api(self) -> bool:
-        return self._http_api is not None
+        return self._command_target_device()._http_api is not None
 
     def set_available(self, available: bool) -> None:
         self._available = available
 
     async def get_audio_output_hw_mode(self) -> str | None:
+        state_device = self._state_source_device()
+        if state_device is not self:
+            return await state_device.get_audio_output_hw_mode()
+
         response = await self._http_request(WiimHttpCommand.AUDIO_OUTPUT_HW_MODE)
 
         hardware_output_mode: dict[str, Any] = {}
@@ -1862,6 +2051,10 @@ class WiimDevice:
 
     async def async_get_current_media(self) -> WiimMediaMetadata | None:
         """Sync device position then return metadata."""
+        state_device = self._state_source_device()
+        if state_device is not self:
+            return await state_device.async_get_current_media()
+
         if not self.current_track_info:
             return None
 
@@ -1870,6 +2063,11 @@ class WiimDevice:
         return self.current_media
 
     async def sync_device_duration_and_position(self) -> None:
+        state_device = self._state_source_device()
+        if state_device is not self:
+            await state_device.sync_device_duration_and_position()
+            return
+
         try:
             # Call GetPositionInfo directly on the AVTransport service
             position_response = await self.async_set_AVT_cmd(
@@ -1905,11 +2103,21 @@ class WiimDevice:
             await self._renew_subscriptions()
 
     async def play_preset(self, preset: int) -> None:
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.play_preset(preset)
+            return
+
         if not self.supports_http_api:
             raise RuntimeError("HTTP API not supported")
         await self._http_command_ok(WiimHttpCommand.PLAY_PRESET, str(preset))
 
     async def play_url(self, url: str) -> None:
+        target_device = self._command_target_device()
+        if target_device is not self:
+            await target_device.play_url(url)
+            return
+
         if not self.supports_http_api:
             raise RuntimeError("HTTP API not supported")
         await self._http_command_ok(WiimHttpCommand.PLAY, url)

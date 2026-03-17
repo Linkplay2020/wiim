@@ -19,11 +19,14 @@ class TestWiimController:
         await controller.add_device(mock_wiim_device)
         assert len(controller.devices) == 1
         assert controller.get_device(mock_wiim_device.udn) == mock_wiim_device
+        mock_wiim_device.attach_controller.assert_called_once_with(controller)
 
         # Remove device
+        mock_wiim_device.attach_controller.reset_mock()
         await controller.remove_device(mock_wiim_device.udn)
         assert len(controller.devices) == 0
         mock_wiim_device.disconnect.assert_called_once()
+        mock_wiim_device.attach_controller.assert_called_once_with(None)
 
     def test_get_device_raises_for_unknown_udn(self, mock_session):
         """Test managed device lookups raise for unknown UDNs."""
@@ -131,6 +134,24 @@ class TestWiimController:
 
         with pytest.raises(ValueError, match="unknown_udn"):
             controller.get_group_snapshot("unknown_udn")
+
+    def test_notify_group_state_change(self, mock_session):
+        """Test leader state changes notify grouped followers."""
+        controller = WiimController(mock_session)
+        leader = MagicMock()
+        leader.udn = "leader_udn"
+        follower = MagicMock()
+        follower.udn = "follower_udn"
+        follower.general_event_callback = MagicMock()
+        controller._multiroom_groups = {"leader_udn": ["follower_udn"]}
+        controller._devices = {
+            "leader_udn": leader,
+            "follower_udn": follower,
+        }
+
+        controller.notify_group_state_change(leader)
+
+        follower.general_event_callback.assert_called_once_with(leader)
 
     @pytest.mark.asyncio
     async def test_async_join_group(self, mock_session, mock_wiim_device):
