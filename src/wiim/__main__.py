@@ -147,12 +147,11 @@ async def main_cli():
             )
             print(f"  Volume: {device.volume}% {'(Muted)' if device.is_muted else ''}")
 
-            if device.current_track_info:
-                track_info = device.current_track_info
+            if media := device.current_media:
                 print("  Current Track:")
-                print(f"    Title: {track_info.get('title', 'N/A')}")
-                print(f"    Artist: {track_info.get('artist', 'N/A')}")
-                print(f"    Album: {track_info.get('album', 'N/A')}")
+                print(f"    Title: {media.title or 'N/A'}")
+                print(f"    Artist: {media.artist or 'N/A'}")
+                print(f"    Album: {media.album or 'N/A'}")
 
         # Clean up resources
         print("\nDisconnecting from devices...")

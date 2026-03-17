@@ -1824,29 +1824,9 @@ class WiimDevice:
         return self._state_source_device()._output_mode
 
     @property
-    def current_track_info(self) -> dict[str, Any]:
-        """Return grouped raw track metadata."""
-        return dict(self._state_source_device()._current_track_info)
-
-    @property
-    def current_track_uri(self) -> str | None:
-        """Return grouped current track URI."""
-        return self._state_source_device()._current_track_uri
-
-    @property
     def loop_mode(self) -> LoopMode:
         """Return grouped loop mode."""
         return self._state_source_device()._loop_mode
-
-    @property
-    def current_position(self) -> int:
-        """Return grouped playback position."""
-        return self._state_source_device()._current_position
-
-    @property
-    def current_track_duration(self) -> int:
-        """Return grouped current track duration."""
-        return self._state_source_device()._current_track_duration
 
     @property
     def available(self) -> bool:
@@ -1882,11 +1862,11 @@ class WiimDevice:
             image_url=state_device._current_track_info.get("albumArtURI")
             or state_device._current_track_info.get("album_art_uri"),
             uri=state_device._current_track_info.get("uri"),
-            duration=state_device.current_track_duration
+            duration=state_device._current_track_duration
             or state_device._current_track_info.get(
                 "duration"
             ),
-            position=state_device.current_position,
+            position=state_device._current_position,
         )
 
     @property
