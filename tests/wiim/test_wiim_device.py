@@ -412,6 +412,10 @@ class TestWiimDevice:
         )
         leader.attach_controller(controller)
         follower.attach_controller(controller)
+        leader._http_api = AsyncMock(spec=WiimApiEndpoint)
+        leader._invoke_upnp_action = AsyncMock(return_value={})
+        follower._invoke_upnp_action = AsyncMock(return_value={})
+        leader._http_command_ok = AsyncMock(return_value={})
 
         follower.async_play = AsyncMock(wraps=follower.async_play)
         leader.async_play = AsyncMock(wraps=leader.async_play)

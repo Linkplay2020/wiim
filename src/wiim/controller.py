@@ -270,13 +270,14 @@ class WiimController:
                 member_udns=(device_udn, *follower_udns),
             )
 
-        for leader_udn, follower_udns in self._multiroom_groups.items():
+        for leader_udn, follower_udns_list in self._multiroom_groups.items():
+            follower_udns = tuple(follower_udns_list)
             if device_udn in follower_udns:
                 return WiimGroupSnapshot(
                     role=WiimGroupRole.FOLLOWER,
-                leader_udn=leader_udn,
-                member_udns=(leader_udn, *tuple(follower_udns)),
-            )
+                    leader_udn=leader_udn,
+                    member_udns=(leader_udn, *follower_udns),
+                )
 
         return WiimGroupSnapshot(
             role=WiimGroupRole.STANDALONE,
