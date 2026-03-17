@@ -41,8 +41,28 @@ class WiimController:
         """Return a list of all managed WiiM devices."""
         return list(self._devices.values())
 
+    def _managed_group_snapshots(self) -> Dict[str, WiimGroupSnapshot]:
+        """Return current group snapshots for all managed devices."""
+        return {
+            device_udn: self.get_group_snapshot(device_udn)
+            for device_udn in self._devices
+        }
+
+    def _notify_group_snapshot_changes(
+        self, previous_snapshots: Dict[str, WiimGroupSnapshot]
+    ) -> None:
+        """Notify devices whose group snapshot changed."""
+        for device_udn, device in self._devices.items():
+            if device.general_event_callback is None:
+                continue
+
+            current_snapshot = self.get_group_snapshot(device_udn)
+            if previous_snapshots.get(device_udn) != current_snapshot:
+                device.general_event_callback(device)
+
     async def add_device(self, wiim_device: WiimDevice) -> None:
         """Add a WiiM device to the controller."""
+        wiim_device.attach_controller(self)
         if wiim_device.udn in self._devices:
             self.logger.debug("Device %s already managed.", wiim_device.udn)
             self._devices[wiim_device.udn] = wiim_device
@@ -58,6 +78,7 @@ class WiimController:
         """Remove a WiiM device from the controller."""
         device = self._devices.pop(udn, None)
         if device:
+            device.attach_controller(None)
             await device.disconnect()
             self.logger.info(
                 "Removed device %s (%s) from controller.", device.name, udn
@@ -78,7 +99,7 @@ class WiimController:
         )
         await self.async_update_all_multiroom_status()
 
-    async def async_update_multiroom_status(self, leader_device: WiimDevice) -> None:
+    async def _async_refresh_multiroom_status(self, leader_device: WiimDevice) -> None:
         """
         Updates the multiroom status for a group where leader_device is the leader.
         Multiroom grouping is typically done via HTTP API for WiiM.
@@ -172,6 +193,12 @@ class WiimController:
             if leader_device.udn in self._multiroom_groups:
                 del self._multiroom_groups[leader_device.udn]
 
+    async def async_update_multiroom_status(self, leader_device: WiimDevice) -> None:
+        """Refresh one device's multiroom status and notify affected devices."""
+        previous_snapshots = self._managed_group_snapshots()
+        await self._async_refresh_multiroom_status(leader_device)
+        self._notify_group_snapshot_changes(previous_snapshots)
+
     def _restore_full_udn(self, short_uuid: str, leader_udn: str) -> str | None:
         """Restores a full UDN (uuid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"""
         prefix = short_uuid[:8]
@@ -188,13 +215,14 @@ class WiimController:
     async def async_update_all_multiroom_status(self) -> None:
         """Updates multiroom status for all managed devices that could be leaders."""
         self.logger.debug("Updating all multiroom statuses...")
+        previous_snapshots = self._managed_group_snapshots()
 
         # Clear existing groups first before re-populating
         self._multiroom_groups.clear()
 
         # This ensures the loop is stable even if add/remove devices occur concurrently.
         for device in list(self._devices.values()):
-            await self.async_update_multiroom_status(device)
+            await self._async_refresh_multiroom_status(device)
 
         all_followers_being_led = set()
         for leader_udn, follower_udns in self._multiroom_groups.items():
@@ -216,6 +244,7 @@ class WiimController:
             "Finished updating all multiroom statuses. Current groups: %s",
             self._multiroom_groups,
         )
+        self._notify_group_snapshot_changes(previous_snapshots)
 
     def get_device_group_info(self, device_udn: str) -> Dict[str, str]:
         """
@@ -241,13 +270,14 @@ class WiimController:
                 member_udns=(device_udn, *follower_udns),
             )
 
-        for leader_udn, follower_udns in self._multiroom_groups.items():
+        for leader_udn, follower_udns_list in self._multiroom_groups.items():
+            follower_udns = tuple(follower_udns_list)
             if device_udn in follower_udns:
                 return WiimGroupSnapshot(
                     role=WiimGroupRole.FOLLOWER,
-                leader_udn=leader_udn,
-                member_udns=(leader_udn, *tuple(follower_udns)),
-            )
+                    leader_udn=leader_udn,
+                    member_udns=(leader_udn, *follower_udns),
+                )
 
         return WiimGroupSnapshot(
             role=WiimGroupRole.STANDALONE,
