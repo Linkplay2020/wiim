@@ -82,6 +82,91 @@ class TestWiimController:
         assert leader.udn in controller._multiroom_groups
         assert controller._multiroom_groups[leader.udn] == [follower.udn]
 
+    @pytest.mark.asyncio
+    async def test_async_update_multiroom_status_notifies_on_group_change(
+        self, mock_session
+    ):
+        """Test devices are notified when a new group is formed."""
+        controller = WiimController(mock_session)
+
+        leader = MagicMock(spec=WiimDevice)
+        leader.udn = "uuid:11111111-2222-3333-4444-555555555555"
+        leader.name = "Leader"
+        leader._http_api = AsyncMock()
+        leader._http_request = AsyncMock(
+            return_value={
+                MultiroomAttribute.NUM_FOLLOWERS: "1",
+                MultiroomAttribute.FOLLOWER_LIST: [
+                    {
+                        MultiroomAttribute.UUID: "66666666777788889999aaaaaaaa"
+                    }
+                ],
+            }
+        )
+        leader.general_event_callback = MagicMock()
+
+        follower = MagicMock(spec=WiimDevice)
+        follower.udn = "uuid:66666666-7777-8888-9999-aaaaaaaa66666666"
+        follower.name = "Follower"
+        follower.general_event_callback = MagicMock()
+
+        controller._devices = {
+            leader.udn: leader,
+            follower.udn: follower,
+        }
+
+        await controller.async_update_multiroom_status(leader)
+
+        leader.general_event_callback.assert_called_once_with(leader)
+        follower.general_event_callback.assert_called_once_with(follower)
+
+    @pytest.mark.asyncio
+    async def test_async_update_all_multiroom_status_notifies_on_leader_change(
+        self, mock_session
+    ):
+        """Test devices are notified when a follower switches leaders."""
+        controller = WiimController(mock_session)
+
+        old_leader = MagicMock(spec=WiimDevice)
+        old_leader.udn = "old_leader_udn"
+        old_leader.general_event_callback = MagicMock()
+
+        new_leader = MagicMock(spec=WiimDevice)
+        new_leader.udn = "new_leader_udn"
+        new_leader.general_event_callback = MagicMock()
+
+        follower = MagicMock(spec=WiimDevice)
+        follower.udn = "follower_udn"
+        follower.general_event_callback = MagicMock()
+
+        other = MagicMock(spec=WiimDevice)
+        other.udn = "other_udn"
+        other.general_event_callback = MagicMock()
+
+        controller._devices = {
+            old_leader.udn: old_leader,
+            new_leader.udn: new_leader,
+            follower.udn: follower,
+            other.udn: other,
+        }
+        controller._multiroom_groups = {old_leader.udn: [follower.udn]}
+
+        async def async_refresh(device: WiimDevice) -> None:
+            if device.udn == new_leader.udn:
+                controller._multiroom_groups[new_leader.udn] = [follower.udn]
+
+        with patch.object(
+            controller,
+            "_async_refresh_multiroom_status",
+            AsyncMock(side_effect=async_refresh),
+        ):
+            await controller.async_update_all_multiroom_status()
+
+        old_leader.general_event_callback.assert_called_once_with(old_leader)
+        new_leader.general_event_callback.assert_called_once_with(new_leader)
+        follower.general_event_callback.assert_called_once_with(follower)
+        other.general_event_callback.assert_not_called()
+
     def test_get_device_group_info(self, mock_session):
         """Test the function that determines a device's role in a group."""
         controller = WiimController(mock_session)
