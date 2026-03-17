@@ -207,17 +207,12 @@ class WiimDevice:
         self,
         *,
         for_commands: bool,
-        reason: str,
     ) -> WiimDevice:
         """Return the effective grouped target for state reads or commands."""
         if self._controller is None:
             return self
 
-        try:
-            group_snapshot = self._controller.get_group_snapshot(self.udn)
-        except ValueError:
-            return self
-
+        group_snapshot = self._controller.get_group_snapshot(self.udn)
         if group_snapshot.role != WiimGroupRole.FOLLOWER:
             return self
 
@@ -229,31 +224,15 @@ class WiimDevice:
         if target_udn == self.udn:
             return self
 
-        try:
-            return self._controller.get_device(target_udn)
-        except ValueError:
-            self.logger.debug(
-                "Device %s: Could not resolve grouped %s target %s, using local device",
-                self.name,
-                reason,
-                target_udn,
-            )
-            return self
+        return self._controller.get_device(target_udn)
 
     def _state_source_device(self) -> WiimDevice:
         """Return the device whose playback state should back this device."""
-        return self._resolve_group_device(for_commands=False, reason="state")
+        return self._resolve_group_device(for_commands=False)
 
     def _command_target_device(self) -> WiimDevice:
         """Return the device that should receive grouped control commands."""
-        return self._resolve_group_device(for_commands=True, reason="command")
-
-    def _notify_group_followers(self) -> None:
-        """Fan out leader state changes to grouped followers."""
-        if self._controller is None:
-            return
-
-        self._controller.notify_group_state_change(self)
+        return self._resolve_group_device(for_commands=True)
 
     async def async_init_services_and_subscribe(self) -> bool:
         """
@@ -633,8 +612,6 @@ class WiimDevice:
                     exc_info=True,
                 )
 
-        self._notify_group_followers()
-
     def _internal_handle_rendering_control_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
     ) -> None:
@@ -779,8 +756,6 @@ class WiimDevice:
                         exc_info=True,
                     )
 
-        self._notify_group_followers()
-
     def _internal_handle_play_queue_event(
         self, service: UpnpService, state_variables: Sequence[UpnpStateVariable]
     ) -> None:
@@ -841,8 +816,6 @@ class WiimDevice:
                     e,
                     exc_info=True,
                 )
-
-        self._notify_group_followers()
 
     def get_display_name_by_command_str(self, command_str: str) -> str | None:
         """Helper to get display name from command string for AudioOutputHwMode."""

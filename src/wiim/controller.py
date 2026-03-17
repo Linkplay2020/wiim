@@ -1,5 +1,4 @@
 from __future__ import annotations
-from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     List,
@@ -42,58 +41,6 @@ class WiimController:
         """Return a list of all managed WiiM devices."""
         return list(self._devices.values())
 
-    @staticmethod
-    def _collect_group_members(groups: Mapping[str, List[str]]) -> set[str]:
-        """Return all UDNs referenced by the given group map."""
-        members: set[str] = set()
-        for leader_udn, follower_udns in groups.items():
-            members.add(leader_udn)
-            members.update(follower_udns)
-        return members
-
-    def _notify_topology_change(self, device_udns: set[str]) -> None:
-        """Notify devices that group membership changed."""
-        for device_udn in device_udns:
-            device = self._devices.get(device_udn)
-            if device is None or device.general_event_callback is None:
-                continue
-
-            try:
-                device.general_event_callback(device)
-            except Exception as err:  # pylint: disable=broad-except
-                self.logger.warning(
-                    "Failed to notify topology change for %s: %s",
-                    device_udn,
-                    err,
-                    exc_info=True,
-                )
-
-    def notify_group_state_change(self, source_device: WiimDevice) -> None:
-        """Notify grouped followers when a leader state changes."""
-        try:
-            group_snapshot = self.get_group_snapshot(source_device.udn)
-        except ValueError:
-            return
-
-        if group_snapshot.role != WiimGroupRole.LEADER:
-            return
-
-        for follower_udn in group_snapshot.member_udns[1:]:
-            follower = self._devices.get(follower_udn)
-            if follower is None or follower.general_event_callback is None:
-                continue
-
-            try:
-                follower.general_event_callback(source_device)
-            except Exception as err:  # pylint: disable=broad-except
-                self.logger.warning(
-                    "Failed to notify follower %s for leader %s: %s",
-                    follower_udn,
-                    source_device.udn,
-                    err,
-                    exc_info=True,
-                )
-
     async def add_device(self, wiim_device: WiimDevice) -> None:
         """Add a WiiM device to the controller."""
         wiim_device.attach_controller(self)
@@ -133,14 +80,11 @@ class WiimController:
         )
         await self.async_update_all_multiroom_status()
 
-    async def async_update_multiroom_status(
-        self, leader_device: WiimDevice, *, notify: bool = True
-    ) -> None:
+    async def async_update_multiroom_status(self, leader_device: WiimDevice) -> None:
         """
         Updates the multiroom status for a group where leader_device is the leader.
         Multiroom grouping is typically done via HTTP API for WiiM.
         """
-        previous_followers = set(self._multiroom_groups.get(leader_device.udn, []))
         if not leader_device._http_api:
             self.logger.debug(
                 "Leader device %s has no HTTP API, cannot update multiroom status.",
@@ -148,8 +92,6 @@ class WiimController:
             )
             if leader_device.udn in self._multiroom_groups:
                 del self._multiroom_groups[leader_device.udn]
-            if notify and previous_followers:
-                self._notify_topology_change({leader_device.udn, *previous_followers})
             return
 
         try:
@@ -231,13 +173,6 @@ class WiimController:
             )
             if leader_device.udn in self._multiroom_groups:
                 del self._multiroom_groups[leader_device.udn]
-        finally:
-            if notify:
-                current_followers = set(self._multiroom_groups.get(leader_device.udn, []))
-                if current_followers != previous_followers:
-                    self._notify_topology_change(
-                        {leader_device.udn, *previous_followers, *current_followers}
-                    )
 
     def _restore_full_udn(self, short_uuid: str, leader_udn: str) -> str | None:
         """Restores a full UDN (uuid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"""
@@ -255,17 +190,13 @@ class WiimController:
     async def async_update_all_multiroom_status(self) -> None:
         """Updates multiroom status for all managed devices that could be leaders."""
         self.logger.debug("Updating all multiroom statuses...")
-        previous_groups = {
-            leader_udn: list(follower_udns)
-            for leader_udn, follower_udns in self._multiroom_groups.items()
-        }
 
         # Clear existing groups first before re-populating
         self._multiroom_groups.clear()
 
         # This ensures the loop is stable even if add/remove devices occur concurrently.
         for device in list(self._devices.values()):
-            await self.async_update_multiroom_status(device, notify=False)
+            await self.async_update_multiroom_status(device)
 
         all_followers_being_led = set()
         for leader_udn, follower_udns in self._multiroom_groups.items():
@@ -287,12 +218,6 @@ class WiimController:
             "Finished updating all multiroom statuses. Current groups: %s",
             self._multiroom_groups,
         )
-
-        if previous_groups != self._multiroom_groups:
-            self._notify_topology_change(
-                self._collect_group_members(previous_groups)
-                | self._collect_group_members(self._multiroom_groups)
-            )
 
     def get_device_group_info(self, device_udn: str) -> Dict[str, str]:
         """

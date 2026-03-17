@@ -135,24 +135,6 @@ class TestWiimController:
         with pytest.raises(ValueError, match="unknown_udn"):
             controller.get_group_snapshot("unknown_udn")
 
-    def test_notify_group_state_change(self, mock_session):
-        """Test leader state changes notify grouped followers."""
-        controller = WiimController(mock_session)
-        leader = MagicMock()
-        leader.udn = "leader_udn"
-        follower = MagicMock()
-        follower.udn = "follower_udn"
-        follower.general_event_callback = MagicMock()
-        controller._multiroom_groups = {"leader_udn": ["follower_udn"]}
-        controller._devices = {
-            "leader_udn": leader,
-            "follower_udn": follower,
-        }
-
-        controller.notify_group_state_change(leader)
-
-        follower.general_event_callback.assert_called_once_with(leader)
-
     @pytest.mark.asyncio
     async def test_async_join_group(self, mock_session, mock_wiim_device):
         """Test that the join group command is sent to the correct device (the follower)."""
