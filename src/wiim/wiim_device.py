@@ -151,14 +151,14 @@ class WiimDevice:
         self.volume: int = 0
         self.is_muted: bool = False
         self._playing_status: PlayingStatus = PlayingStatus.STOPPED
-        self.current_track_info: dict[str, Any] = {}
-        self.current_track_uri: str | None = None
+        self._current_track_info: dict[str, Any] = {}
+        self._current_track_uri: str | None = None
         self._play_mode: str = ""
         self.input_source: str
-        self.loop_mode: LoopMode = LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
+        self._loop_mode: LoopMode = LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
         self.equalizer_mode: EqualizerMode = EqualizerMode.NONE
-        self.current_position: int = 0
-        self.current_track_duration: int = 0
+        self._current_position: int = 0
+        self._current_track_duration: int = 0
         self.next_track_uri: str | None = None
         self._output_mode: str | None = None
         self.input_mode: InputMode = InputMode.WIFI
@@ -1811,41 +1811,82 @@ class WiimDevice:
     @property
     def playing_status(self) -> PlayingStatus:
         """Return grouped playback status."""
-        state_device = self._state_source_device()
-        if state_device is not self:
-            return state_device.playing_status
-        return self._playing_status
+        return self._state_source_device()._playing_status
 
     @playing_status.setter
     def playing_status(self, status: PlayingStatus) -> None:
-        """Store the local playback status for this device."""
-        self._playing_status = status
+        """Store playback status on the effective grouped state device."""
+        self._state_source_device()._playing_status = status
 
     @property
     def play_mode(self) -> str:
         """Return grouped input/play mode."""
-        state_device = self._state_source_device()
-        if state_device is not self:
-            return state_device.play_mode
-        return self._play_mode
+        return self._state_source_device()._play_mode
 
     @play_mode.setter
     def play_mode(self, mode: str) -> None:
-        """Store the local input/play mode for this device."""
-        self._play_mode = mode
+        """Store input/play mode on the effective grouped state device."""
+        self._state_source_device()._play_mode = mode
 
     @property
     def output_mode(self) -> str | None:
         """Return grouped audio output mode."""
-        state_device = self._state_source_device()
-        if state_device is not self:
-            return state_device.output_mode
-        return self._output_mode
+        return self._state_source_device()._output_mode
 
     @output_mode.setter
     def output_mode(self, mode: str | None) -> None:
-        """Store the local audio output mode for this device."""
-        self._output_mode = mode
+        """Store audio output mode on the effective grouped state device."""
+        self._state_source_device()._output_mode = mode
+
+    @property
+    def current_track_info(self) -> dict[str, Any]:
+        """Return grouped raw track metadata."""
+        return self._state_source_device()._current_track_info
+
+    @current_track_info.setter
+    def current_track_info(self, track_info: dict[str, Any]) -> None:
+        """Store raw track metadata on the effective grouped state device."""
+        self._state_source_device()._current_track_info = track_info
+
+    @property
+    def current_track_uri(self) -> str | None:
+        """Return grouped current track URI."""
+        return self._state_source_device()._current_track_uri
+
+    @current_track_uri.setter
+    def current_track_uri(self, uri: str | None) -> None:
+        """Store current track URI on the effective grouped state device."""
+        self._state_source_device()._current_track_uri = uri
+
+    @property
+    def loop_mode(self) -> LoopMode:
+        """Return grouped loop mode."""
+        return self._state_source_device()._loop_mode
+
+    @loop_mode.setter
+    def loop_mode(self, mode: LoopMode) -> None:
+        """Store loop mode on the effective grouped state device."""
+        self._state_source_device()._loop_mode = mode
+
+    @property
+    def current_position(self) -> int:
+        """Return grouped playback position."""
+        return self._state_source_device()._current_position
+
+    @current_position.setter
+    def current_position(self, position: int) -> None:
+        """Store playback position on the effective grouped state device."""
+        self._state_source_device()._current_position = position
+
+    @property
+    def current_track_duration(self) -> int:
+        """Return grouped current track duration."""
+        return self._state_source_device()._current_track_duration
+
+    @current_track_duration.setter
+    def current_track_duration(self, duration: int) -> None:
+        """Store current track duration on the effective grouped state device."""
+        self._state_source_device()._current_track_duration = duration
 
     @property
     def available(self) -> bool:

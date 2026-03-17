@@ -372,6 +372,25 @@ class TestWiimDevice:
         follower.async_set_AVT_cmd.assert_not_called()
         leader.async_set_AVT_cmd.assert_awaited_once()
 
+        follower.playing_status = PlayingStatus.PAUSED
+        follower.play_mode = "Line In"
+        follower.output_mode = "optical"
+        follower.loop_mode = LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
+        follower.current_track_info = {
+            "title": "Follower Proxy Song",
+            "artist": "Proxy Artist",
+        }
+        follower.current_track_duration = 99
+        follower.current_position = 21
+
+        assert leader.playing_status == PlayingStatus.PAUSED
+        assert leader.play_mode == "Line In"
+        assert leader.output_mode == "optical"
+        assert leader.loop_mode == LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
+        assert leader.current_track_info["title"] == "Follower Proxy Song"
+        assert leader.current_track_duration == 99
+        assert leader.current_position == 21
+
     @pytest.mark.asyncio
     async def test_follower_forwards_commands_except_volume_and_mute(
         self, mock_session
