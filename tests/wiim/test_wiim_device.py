@@ -187,15 +187,15 @@ class TestWiimDevice:
     ):
         """Test current media metadata is exposed through a typed helper."""
         device = WiimDevice(mock_upnp_device, mock_session)
-        device.current_track_info = {
+        device._current_track_info = {
             "title": "Test Song",
             "artist": "Test Artist",
             "album": "Test Album",
             "uri": "https://example.com/song.mp3",
             "albumArtURI": "https://example.com/art.jpg",
         }
-        device.current_track_duration = 210
-        device.current_position = 15
+        device._current_track_duration = 210
+        device._current_position = 15
 
         media = device.current_media
 
@@ -212,7 +212,7 @@ class TestWiimDevice:
     def test_loop_state_helpers(self, mock_upnp_device, mock_session):
         """Test normalized loop mode helpers."""
         device = WiimDevice(mock_upnp_device, mock_session)
-        device.loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
+        device._loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
 
         assert device.loop_state.repeat == WiimRepeatMode.ONE
         assert device.loop_state.shuffle is True
@@ -328,18 +328,18 @@ class TestWiimDevice:
         leader.attach_controller(controller)
         follower.attach_controller(controller)
 
-        leader.playing_status = PlayingStatus.PLAYING
-        leader.play_mode = "Spotify"
-        leader.output_mode = "speaker"
-        leader.loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
-        leader.current_track_info = {
+        leader._playing_status = PlayingStatus.PLAYING
+        leader._play_mode = "Spotify"
+        leader._output_mode = "speaker"
+        leader._loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
+        leader._current_track_info = {
             "title": "Leader Song",
             "artist": "Leader Artist",
             "album": "Leader Album",
             "uri": "https://example.com/leader.mp3",
         }
-        leader.current_track_duration = 215
-        leader.current_position = 42
+        leader._current_track_duration = 215
+        leader._current_position = 42
         leader._supported_model_name = MagicMock(return_value="WiiM Pro")
         follower._supported_model_name = MagicMock(return_value=None)
         leader._http_api = AsyncMock(spec=WiimApiEndpoint)
@@ -371,25 +371,6 @@ class TestWiimDevice:
         assert capabilities.can_repeat is True
         follower.async_set_AVT_cmd.assert_not_called()
         leader.async_set_AVT_cmd.assert_awaited_once()
-
-        follower.playing_status = PlayingStatus.PAUSED
-        follower.play_mode = "Line In"
-        follower.output_mode = "optical"
-        follower.loop_mode = LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
-        follower.current_track_info = {
-            "title": "Follower Proxy Song",
-            "artist": "Proxy Artist",
-        }
-        follower.current_track_duration = 99
-        follower.current_position = 21
-
-        assert leader.playing_status == PlayingStatus.PAUSED
-        assert leader.play_mode == "Line In"
-        assert leader.output_mode == "optical"
-        assert leader.loop_mode == LoopMode.SHUFFLE_DISABLE_REPEAT_ALL
-        assert leader.current_track_info["title"] == "Follower Proxy Song"
-        assert leader.current_track_duration == 99
-        assert leader.current_position == 21
 
     @pytest.mark.asyncio
     async def test_follower_forwards_commands_except_volume_and_mute(

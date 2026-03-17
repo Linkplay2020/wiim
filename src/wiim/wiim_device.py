@@ -714,7 +714,7 @@ class WiimDevice:
                 if category == "bluetooth":
                     connected = body.get("connected")
                     if connected == 1:
-                        self.output_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
+                        self._output_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
 
                 elif category == "hardware":
                     output_mode_val = body.get("output_mode")
@@ -725,11 +725,11 @@ class WiimDevice:
                                 and any(key in self._udn for key in AUDIO_AUX_MODE_IDS)
                                 and output_mode_val == "AUDIO_OUTPUT_AUX_MODE"
                             ):
-                                self.output_mode = (
+                                self._output_mode = (
                                     AudioOutputHwMode.SPEAKER_OUT.display_name  # type: ignore[attr-defined]
                                 )
                             else:
-                                self.output_mode = self.get_display_name_by_command_str(
+                                self._output_mode = self.get_display_name_by_command_str(
                                     output_mode_val
                                 )
 
@@ -789,7 +789,7 @@ class WiimDevice:
         if "LoopMode" in event_data:  # Corrected from LoopMode
             loop_mode_val = event_data["LoopMode"]
             try:
-                self.loop_mode = LoopMode(loop_mode_val)
+                self._loop_mode = LoopMode(loop_mode_val)
             except ValueError:
                 SDK_LOGGER.warning(
                     "Device: Invalid loopmode value (not an integer) from PlayQueue event: %s",
@@ -799,7 +799,7 @@ class WiimDevice:
         if "LoopMpde" in event_data:  # Corrected from LoopMpde
             loop_mode_val = event_data["LoopMpde"]
             try:
-                self.loop_mode = LoopMode(loop_mode_val)
+                self._loop_mode = LoopMode(loop_mode_val)
             except ValueError:
                 SDK_LOGGER.warning(
                     "Device: Invalid loopmode value (not an integer) from PlayQueue event: %s",
@@ -864,7 +864,7 @@ class WiimDevice:
                 "TRANSITIONING": PlayingStatus.LOADING,
                 "NO_MEDIA_PRESENT": PlayingStatus.STOPPED,
             }
-            self.playing_status = state_map.get(
+            self._playing_status = state_map.get(
                 event_data["TransportState"], self._playing_status
             )
             self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
@@ -872,18 +872,18 @@ class WiimDevice:
             )
         
         if "CurrentTrackURI" in event_data:
-            self.current_track_uri = event_data["CurrentTrackURI"]
+            self._current_track_uri = event_data["CurrentTrackURI"]
         else:
-            self.current_track_uri = None
+            self._current_track_uri = None
 
         if "CurrentTrackDuration" in event_data:
             duration = self.parse_duration(event_data["CurrentTrackDuration"])
-            self.current_track_duration = duration
+            self._current_track_duration = duration
 
         if "RelativeTimePosition" in event_data:
             position = self.parse_duration(event_data["RelativeTimePosition"])
             position = max(position, 0)
-            self.current_position = position
+            self._current_position = position
 
         if "A_ARG_TYPE_SeekTarget" in event_data:
             position_str = event_data["A_ARG_TYPE_SeekTarget"]
@@ -892,7 +892,7 @@ class WiimDevice:
             if position_str:
                 try:
                     position = self.parse_duration(position_str)
-                    self.current_position = position
+                    self._current_position = position
                     SDK_LOGGER.debug(
                         f"Device: Updated media position to {position} seconds."
                     )
@@ -906,7 +906,7 @@ class WiimDevice:
                 event_data["PlaybackStorageMedium"], 1
             )
             new_mode = InputMode(playMedium)  # type: ignore[call-arg]
-            self.play_mode = new_mode.display_name  # type: ignore[attr-defined]
+            self._play_mode = new_mode.display_name  # type: ignore[attr-defined]
 
         # Prioritize AVTransportURIMetaData for media metadata if available, otherwise fallback to CurrentTrackMetaData
         media_metadata_key = None
@@ -978,7 +978,7 @@ class WiimDevice:
                         meta = {}
 
                 # Update the device's internal current_track_info dictionary
-                self.current_track_info = {
+                self._current_track_info = {
                     "title": meta.get("title"),
                     "artist": meta.get("artist"),
                     "album": meta.get("album"),
@@ -1093,7 +1093,7 @@ class WiimDevice:
                         ps, PlayingStatus.UNKNOWN
                     )
                     if self._playing_status != http_playing_status:
-                        self.playing_status = http_playing_status
+                        self._playing_status = http_playing_status
                 except ValueError:
                     self.logger.warning(
                         "Invalid playing_status in HTTP status: %s",
@@ -1113,7 +1113,7 @@ class WiimDevice:
             )
             if http_play_mode_str:
                 try:
-                    self.play_mode = get_input_mode_from_playing_mode(
+                    self._play_mode = get_input_mode_from_playing_mode(
                         http_play_mode_str
                     ).display_name  # type: ignore[attr-defined]
                 except ValueError:
@@ -1126,7 +1126,7 @@ class WiimDevice:
             )
             if http_loop_mode_str:
                 try:
-                    self.loop_mode = LoopMode(int(http_loop_mode_str))
+                    self._loop_mode = LoopMode(int(http_loop_mode_str))
                 except ValueError:
                     self.logger.warning(
                         "Invalid playback_mode in HTTP status: %s", http_play_mode_str
@@ -1240,7 +1240,7 @@ class WiimDevice:
                 CurrentURIMetaData=didl_metadata,
             )
         await self._invoke_upnp_action("AVTransport", "Play", Speed="1")
-        self.playing_status = PlayingStatus.PLAYING
+        self._playing_status = PlayingStatus.PLAYING
 
     async def async_pause(self) -> None:
         """Pause playback."""
@@ -1250,7 +1250,7 @@ class WiimDevice:
             return
 
         await self._invoke_upnp_action("AVTransport", "Pause")
-        self.playing_status = PlayingStatus.PAUSED
+        self._playing_status = PlayingStatus.PAUSED
 
     async def async_stop(self) -> None:
         """Stop playback."""
@@ -1260,7 +1260,7 @@ class WiimDevice:
             return
 
         await self._invoke_upnp_action("AVTransport", "Stop")
-        self.playing_status = PlayingStatus.STOPPED
+        self._playing_status = PlayingStatus.STOPPED
 
     async def async_next(self) -> None:
         """Play next track."""
@@ -1338,7 +1338,7 @@ class WiimDevice:
         if http_mode_val and self._http_api:
             try:
                 await self._http_command_ok(WiimHttpCommand.SWITCH_MODE, http_mode_val)
-                self.play_mode = input_mode
+                self._play_mode = input_mode
             except WiimRequestException as e:
                 self.logger.warning(
                     "Device %s: Failed to set play mode to %s via HTTP: %s",
@@ -1382,7 +1382,7 @@ class WiimDevice:
                 await self._http_command_ok(
                     WiimHttpCommand.AUDIO_OUTPUT_HW_MODE_SET, http_mode_val
                 )
-                self.output_mode = output_mode
+                self._output_mode = output_mode
             except WiimRequestException as e:
                 self.logger.warning(
                     "Device %s: Failed to set output mode to %s via HTTP: %s",
@@ -1422,7 +1422,7 @@ class WiimDevice:
         await self._invoke_upnp_action(
             "PlayQueue", "SetQueueLoopMode", LoopMode=int(loop)
         )
-        self.loop_mode = loop
+        self._loop_mode = loop
 
     async def async_get_transport_capabilities(self) -> WiimTransportCapabilities:
         """Return normalized transport capabilities for the current media context."""
@@ -1813,80 +1813,40 @@ class WiimDevice:
         """Return grouped playback status."""
         return self._state_source_device()._playing_status
 
-    @playing_status.setter
-    def playing_status(self, status: PlayingStatus) -> None:
-        """Store playback status on the effective grouped state device."""
-        self._state_source_device()._playing_status = status
-
     @property
     def play_mode(self) -> str:
         """Return grouped input/play mode."""
         return self._state_source_device()._play_mode
-
-    @play_mode.setter
-    def play_mode(self, mode: str) -> None:
-        """Store input/play mode on the effective grouped state device."""
-        self._state_source_device()._play_mode = mode
 
     @property
     def output_mode(self) -> str | None:
         """Return grouped audio output mode."""
         return self._state_source_device()._output_mode
 
-    @output_mode.setter
-    def output_mode(self, mode: str | None) -> None:
-        """Store audio output mode on the effective grouped state device."""
-        self._state_source_device()._output_mode = mode
-
     @property
     def current_track_info(self) -> dict[str, Any]:
         """Return grouped raw track metadata."""
-        return self._state_source_device()._current_track_info
-
-    @current_track_info.setter
-    def current_track_info(self, track_info: dict[str, Any]) -> None:
-        """Store raw track metadata on the effective grouped state device."""
-        self._state_source_device()._current_track_info = track_info
+        return dict(self._state_source_device()._current_track_info)
 
     @property
     def current_track_uri(self) -> str | None:
         """Return grouped current track URI."""
         return self._state_source_device()._current_track_uri
 
-    @current_track_uri.setter
-    def current_track_uri(self, uri: str | None) -> None:
-        """Store current track URI on the effective grouped state device."""
-        self._state_source_device()._current_track_uri = uri
-
     @property
     def loop_mode(self) -> LoopMode:
         """Return grouped loop mode."""
         return self._state_source_device()._loop_mode
-
-    @loop_mode.setter
-    def loop_mode(self, mode: LoopMode) -> None:
-        """Store loop mode on the effective grouped state device."""
-        self._state_source_device()._loop_mode = mode
 
     @property
     def current_position(self) -> int:
         """Return grouped playback position."""
         return self._state_source_device()._current_position
 
-    @current_position.setter
-    def current_position(self, position: int) -> None:
-        """Store playback position on the effective grouped state device."""
-        self._state_source_device()._current_position = position
-
     @property
     def current_track_duration(self) -> int:
         """Return grouped current track duration."""
         return self._state_source_device()._current_track_duration
-
-    @current_track_duration.setter
-    def current_track_duration(self, duration: int) -> None:
-        """Store current track duration on the effective grouped state device."""
-        self._state_source_device()._current_track_duration = duration
 
     @property
     def available(self) -> bool:
@@ -1912,18 +1872,18 @@ class WiimDevice:
     def current_media(self) -> WiimMediaMetadata | None:
         """Return normalized current media metadata."""
         state_device = self._state_source_device()
-        if not state_device.current_track_info:
+        if not state_device._current_track_info:
             return None
 
         return WiimMediaMetadata(
-            title=state_device.current_track_info.get("title"),
-            artist=state_device.current_track_info.get("artist"),
-            album=state_device.current_track_info.get("album"),
-            image_url=state_device.current_track_info.get("albumArtURI")
-            or state_device.current_track_info.get("album_art_uri"),
-            uri=state_device.current_track_info.get("uri"),
+            title=state_device._current_track_info.get("title"),
+            artist=state_device._current_track_info.get("artist"),
+            album=state_device._current_track_info.get("album"),
+            image_url=state_device._current_track_info.get("albumArtURI")
+            or state_device._current_track_info.get("album_art_uri"),
+            uri=state_device._current_track_info.get("uri"),
             duration=state_device.current_track_duration
-            or state_device.current_track_info.get(
+            or state_device._current_track_info.get(
                 "duration"
             ),
             position=state_device.current_position,
@@ -2059,7 +2019,7 @@ class WiimDevice:
                 self.sound_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
                 SDK_LOGGER.debug("Output mode is out range.")
 
-        self.output_mode = self.sound_mode
+        self._output_mode = self.sound_mode
 
         return self.sound_mode
 
@@ -2069,7 +2029,7 @@ class WiimDevice:
         if state_device is not self:
             return await state_device.async_get_current_media()
 
-        if not self.current_track_info:
+        if not self._current_track_info:
             return None
 
         await self.sync_device_duration_and_position()
@@ -2093,8 +2053,8 @@ class WiimDevice:
                 position = self.parse_duration(position_str)
                 position = max(position, 0)
                 duration = self.parse_duration(duration_str)
-                self.current_position = position
-                self.current_track_duration = duration
+                self._current_position = position
+                self._current_track_duration = duration
 
                 SDK_LOGGER.debug(
                     f"Device: Fetched position {position} and duration {duration} from GetPositionInfo after play command."
