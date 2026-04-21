@@ -99,6 +99,7 @@ class PlayerStatus(StrEnum):
     LOADING = "load"
     STOPPED = "stop"
     PAUSED = "pause"
+    NONE = "none"
 
 
 _PLAYER_TO_PLAYING: dict[PlayerStatus, PlayingStatus] = {
@@ -106,6 +107,7 @@ _PLAYER_TO_PLAYING: dict[PlayerStatus, PlayingStatus] = {
     PlayerStatus.LOADING: PlayingStatus.LOADING,
     PlayerStatus.STOPPED: PlayingStatus.STOPPED,
     PlayerStatus.PAUSED: PlayingStatus.PAUSED,
+    PlayerStatus.NONE: PlayingStatus.UNKNOWN,
 }
 
 
