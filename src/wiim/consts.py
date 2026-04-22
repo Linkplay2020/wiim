@@ -190,6 +190,7 @@ class MetaInfoMetaData(StrEnum):
 
 
 MANUFACTURER_WIIM = "Linkplay"
+MANUFACTURER_AUDIO_PRO = "Audio Pro AB"
 
 
 @unique

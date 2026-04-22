@@ -10,7 +10,13 @@ from async_upnp_client.client import UpnpDevice
 from async_upnp_client.client_factory import UpnpFactory
 from async_upnp_client.exceptions import UpnpConnectionError, UpnpError
 
-from .consts import MANUFACTURER_WIIM, SDK_LOGGER, UPNP_DEVICE_TYPE, WiimHttpCommand
+from .consts import (
+    MANUFACTURER_AUDIO_PRO,
+    MANUFACTURER_WIIM,
+    SDK_LOGGER,
+    UPNP_DEVICE_TYPE,
+    WiimHttpCommand,
+)
 from .endpoint import WiimApiEndpoint
 from .exceptions import WiimDeviceException, WiimRequestException
 from .models import WiimProbeResult
@@ -25,13 +31,9 @@ DEVICE_VERIFICATION_TIMEOUT = 5
 
 def _is_supported_wiim_device(device: UpnpDevice) -> bool:
     """Return True if the given UPnP device matches a supported WiiM variant."""
-    return (
-        bool(device.manufacturer)
-        and MANUFACTURER_WIIM.lower() in device.manufacturer.lower()
-    ) or (
-        device.manufacturer == "Audio Pro AB"
-        and bool(device.model_name)
-        and device.model_name == "A10 Speaker"
+    return bool(device.manufacturer) and (
+        MANUFACTURER_WIIM.lower() in device.manufacturer.lower()
+        or MANUFACTURER_AUDIO_PRO.lower() in device.manufacturer.lower()
     )
 
 
