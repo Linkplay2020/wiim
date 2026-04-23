@@ -13,7 +13,7 @@ import time
 import json
 
 from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
-from async_upnp_client.exceptions import UpnpError
+from async_upnp_client.exceptions import UpnpError, UpnpServerOSError
 from async_upnp_client.event_handler import UpnpEventHandler
 from async_upnp_client.aiohttp import AiohttpNotifyServer
 
@@ -292,14 +292,27 @@ class WiimDevice:
                     self.name,
                 )
 
-            if self._notify_server is not None:
-                self._event_handler = self._notify_server.event_handler
-                self._event_handler._notify_server = self._notify_server
-
-            if self._event_handler and self._notify_server:
+            if self._notify_server and self._notify_server.event_handler:
                 if not self._event_handler_started:
                     try:
-                        await self._notify_server.async_start_server()
+                        for attempt in range(256):
+                            try:
+                                await self._notify_server.async_start_server()
+                                break
+                            except UpnpServerOSError:
+                                # try the next port if this one is in use
+                                self._notify_server = AiohttpNotifyServer(
+                                    requester=self.upnp_device.requester,
+                                    source=(source_ip, assigned_port + attempt + 1),
+                                    loop=loop,
+                                )
+                        else:
+                            raise UpnpServerOSError(
+                                f"Device {self.name}: no free port in "
+                                f"{assigned_port}..{assigned_port + 255}"
+                            )
+                        self._event_handler = self._notify_server.event_handler
+                        self._event_handler._notify_server = self._notify_server
                         self.logger.info(
                             "Notify server started at %s (override for device: %s)",
                             self._notify_server.callback_url,
