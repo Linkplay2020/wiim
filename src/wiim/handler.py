@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+import json
 from typing import Any, Dict
 import logging
 
@@ -59,11 +60,15 @@ def parse_last_change_event(xml_text: str, logger: logging.Logger) -> Dict[str, 
                 or variable_name == "AVTransportURIMetaData"
                 or variable_name == "NextAVTransportURIMetaData"
             ):
-                # These are often DIDL-Lite XML strings themselves.
-                # Basic parsing here, more complex parsing might be needed.
+                # Metadata can arrive as JSON or DIDL-Lite XML depending on source/app.
                 try:
                     if value is None:
                         continue
+                    raw_value = value.strip()
+                    if raw_value.startswith("{") or raw_value.startswith("["):
+                        changed_variables[variable_name] = json.loads(raw_value)
+                        continue
+
                     didl_root = ET.fromstring(value)
                     item_node = didl_root.find(
                         ".//{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}item"
@@ -101,6 +106,14 @@ def parse_last_change_event(xml_text: str, logger: logging.Logger) -> Dict[str, 
                         changed_variables[variable_name] = (
                             value  # Store raw if not parsable as DIDL
                         )
+                except json.JSONDecodeError:
+                    if value:
+                        logger.debug(
+                            "Failed to parse metadata JSON for %s: %s",
+                            variable_name,
+                            value[:100],
+                        )
+                    changed_variables[variable_name] = value
                 except ET.ParseError:
                     if value:
                         logger.debug(

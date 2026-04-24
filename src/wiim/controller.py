@@ -60,6 +60,47 @@ class WiimController:
             if previous_snapshots.get(device_udn) != current_snapshot:
                 device.general_event_callback(device)
 
+    def add_group_member(self, leader_udn: str, follower_udn: str) -> None:
+        """Add a follower to the cached group state for a leader."""
+        previous_snapshots = self._managed_group_snapshots()
+        if leader_udn == follower_udn:
+            return
+
+        followers = self._multiroom_groups.setdefault(leader_udn, [])
+        if follower_udn not in followers:
+            followers.append(follower_udn)
+
+        for other_leader_udn, other_followers in self._multiroom_groups.items():
+            if other_leader_udn == leader_udn:
+                continue
+            if follower_udn in other_followers:
+                other_followers.remove(follower_udn)
+
+        empty_leaders = [
+            other_leader_udn
+            for other_leader_udn, other_followers in self._multiroom_groups.items()
+            if other_leader_udn != leader_udn and not other_followers
+        ]
+        for other_leader_udn in empty_leaders:
+            self._multiroom_groups.pop(other_leader_udn, None)
+
+        self._notify_group_snapshot_changes(previous_snapshots)
+
+    def remove_group_member(self, leader_udn: str, follower_udn: str) -> None:
+        """Remove a follower from the cached group state for a leader."""
+        previous_snapshots = self._managed_group_snapshots()
+        followers = self._multiroom_groups.get(leader_udn)
+        if not followers:
+            return
+
+        if follower_udn in followers:
+            followers.remove(follower_udn)
+
+        if not followers:
+            self._multiroom_groups.pop(leader_udn, None)
+
+        self._notify_group_snapshot_changes(previous_snapshots)
+
     async def add_device(self, wiim_device: WiimDevice) -> None:
         """Add a WiiM device to the controller."""
         wiim_device.attach_controller(self)
@@ -299,13 +340,11 @@ class WiimController:
             for member_udn in self.get_group_snapshot(device_udn).member_udns
         ]
 
-    async def async_join_group(self, leader_udn: str, follower_udn: str) -> None:
-        """Make follower_udn join the group led by leader_udn."""
+    async def async_join_group(self, leader_udn: str, group_members: list[str]) -> None:
+        """Make the given devices join the group led by leader_udn."""
         leader = self.get_device(leader_udn)
-        follower = self.get_device(follower_udn)
-
-        if not leader._http_api or not follower._http_api:
-            raise WiimException("HTTP API not available for leader or follower.")
+        if not leader._http_api:
+            raise WiimException("HTTP API not available for leader.")
 
         leader_ip_for_cmd = leader.ip_address
         if not leader_ip_for_cmd:
@@ -331,23 +370,45 @@ class WiimController:
                 leader_ip_for_cmd, formatted_leader_udn
             )
 
-            self.logger.info(
-                "Follower %s sending join command to leader %s: %s",
-                follower.name,
-                leader.name,
-                join_command_url,
-            )
-            await follower._http_command_ok(join_command_url)
-            self.logger.info(
-                "Device %s successfully sent join command to leader %s",
-                follower.name,
-                leader.name,
-            )
+            for follower_udn in group_members:
+                if follower_udn == leader_udn:
+                    continue
+
+                follower = self.get_device(follower_udn)
+                if not follower._http_api:
+                    raise WiimException(
+                        f"HTTP API not available for follower {follower.name}."
+                    )
+
+                follower_group_info = self.get_device_group_info(follower_udn)
+                if follower_group_info["role"] != WiimGroupRole.STANDALONE.value:
+                    self.logger.info(
+                        "Device %s is already grouped as %s. Ungrouping it before join.",
+                        follower.name,
+                        follower_group_info["role"],
+                    )
+                    await self.async_ungroup_device(follower_udn)
+
+                self.logger.info(
+                    "Follower %s sending join command to leader %s: %s",
+                    follower.name,
+                    leader.name,
+                    join_command_url,
+                )
+                await follower._http_command_ok(join_command_url)
+                self.logger.info(
+                    "Device %s successfully sent join command to leader %s",
+                    follower.name,
+                    leader.name,
+                )
 
             await self.async_update_multiroom_status(leader)
         except WiimRequestException as e:
             self.logger.warning(
-                "Failed to make %s join %s: %s", follower.name, leader.name, e
+                "Failed to make devices %s join %s: %s",
+                group_members,
+                leader.name,
+                e,
             )
             raise
 
