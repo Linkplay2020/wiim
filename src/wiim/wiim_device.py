@@ -234,6 +234,18 @@ class WiimDevice:
         """Return the device that should receive grouped control commands."""
         return self._resolve_group_device(for_commands=True)
 
+    def _clear_playback_state(self) -> None:
+        """Reset cached playback state when device-local state is no longer valid."""
+        self._playing_status = PlayingStatus.STOPPED
+        self._current_track_info = {}
+        self._current_track_uri = None
+        self._play_mode = ""
+        self._current_position = 0
+        self._current_track_duration = 0
+        self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
+            PlayingStatus.STOPPED.value
+        )
+
     async def async_init_services_and_subscribe(self) -> bool:
         """
         Initialize UPnP services and subscribe to events.
@@ -742,8 +754,10 @@ class WiimDevice:
                                     AudioOutputHwMode.SPEAKER_OUT.display_name  # type: ignore[attr-defined]
                                 )
                             else:
-                                self._output_mode = self.get_display_name_by_command_str(
-                                    output_mode_val
+                                self._output_mode = (
+                                    self.get_display_name_by_command_str(
+                                        output_mode_val
+                                    )
                                 )
 
                         except ValueError:
@@ -853,15 +867,58 @@ class WiimDevice:
                     action = slave_elem.get("action")
                     slave_udn = slave_elem.get("val")
 
+                    if action and slave_udn:
+                        SDK_LOGGER.debug(
+                            "Device: Detected Slave action=%s for UDN=%s",
+                            action,
+                            slave_udn,
+                        )
+
+                        def restore_uuid(cleaned):
+                            prefix = cleaned[:8]
+                            part1 = cleaned[0:8]
+                            part2 = cleaned[8:12]
+                            part3 = cleaned[12:16]
+                            part4 = cleaned[16:20]
+                            part5 = cleaned[20:] + prefix
+                            return f"uuid:{part1}-{part2}-{part3}-{part4}-{part5}"
+
+                        slave_udn_format = restore_uuid(slave_udn)
+
+                        if action == "rm":
+                            SDK_LOGGER.debug(
+                                "Device: Slave %s removed from group, clearing metadata.",
+                                slave_udn_format,
+                            )
+                            if self._controller is not None:
+                                removed_device = self._controller.get_device(
+                                    slave_udn_format
+                                )
+                                removed_device._clear_playback_state()
+                                self._controller.remove_group_member(
+                                    self.udn, slave_udn_format
+                                )
+                        elif action == "add":
+                            SDK_LOGGER.debug(
+                                "Device: Slave %s added to group, triggering full state update for it.",
+                                slave_udn_format,
+                            )
+                            if self._controller is not None:
+                                self._controller.add_group_member(
+                                    self.udn, slave_udn_format
+                                )
+
                     self.slave_action = action
                     self.slave_udn = slave_udn
         except ET.ParseError as xml_e:
             SDK_LOGGER.warning(
-                f"Device: Failed to parse XML for Slave action in RenderingControl event: {xml_e}"
+                "Device: Failed to parse XML for Slave action in RenderingControl event: %s",
+                xml_e,
             )
         except Exception as general_e:
             SDK_LOGGER.error(
-                f"Device: Unexpected error processing Slave action in RenderingControl event: {general_e}",
+                "Device: Unexpected error processing Slave action in RenderingControl event: %s",
+                general_e,
                 exc_info=True,
             )
             raise
@@ -883,7 +940,7 @@ class WiimDevice:
             self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
                 self._playing_status.value
             )
-        
+
         if "CurrentTrackURI" in event_data:
             self._current_track_uri = event_data["CurrentTrackURI"]
         else:
@@ -932,12 +989,27 @@ class WiimDevice:
             try:
                 meta = event_data[media_metadata_key]
                 if isinstance(meta, str):
-                    SDK_LOGGER.warning(
-                        "Device: %s is raw XML in event, not parsed by SDK. Attempting to parse.",
-                        media_metadata_key,
-                    )
-                    try:
-                        root = ET.fromstring(unescape(meta))
+                    raw_meta = unescape(meta).strip()
+                    if raw_meta.startswith("{") or raw_meta.startswith("["):
+                        SDK_LOGGER.debug(
+                            "Device: %s is raw JSON in event. Attempting to parse.",
+                            media_metadata_key,
+                        )
+                        parsed_meta = json.loads(raw_meta)
+                        if isinstance(parsed_meta, dict):
+                            meta = parsed_meta
+                        else:
+                            SDK_LOGGER.warning(
+                                "Device: %s JSON payload is not an object.",
+                                media_metadata_key,
+                            )
+                            meta = {}
+                    else:
+                        SDK_LOGGER.warning(
+                            "Device: %s is raw XML in event, not parsed by SDK. Attempting to parse.",
+                            media_metadata_key,
+                        )
+                        root = ET.fromstring(raw_meta)
                         didl_ns = {
                             "didl": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
                             "dc": "http://purl.org/dc/elements/1.1/",
@@ -982,41 +1054,49 @@ class WiimDevice:
                                 media_metadata_key,
                             )
                             meta = {}
-                    except ET.ParseError as xml_e:
-                        SDK_LOGGER.error(
-                            "Device: Failed to parse XML from %s: %s",
-                            media_metadata_key,
-                            xml_e,
-                        )
-                        meta = {}
-
-                # Update the device's internal current_track_info dictionary
-                self._current_track_info = {
-                    "title": meta.get("title"),
-                    "artist": meta.get("artist"),
-                    "album": meta.get("album"),
-                    "uri": meta.get("res"),
-                    "duration": (
-                        self.parse_duration(meta.get("duration"))  # noqa: SLF001
-                        if meta.get("duration")
-                        else None
-                    ),
-                    "albumArtURI": self.make_absolute_url(  # noqa: SLF001
-                        meta.get("albumArtURI")
-                    ),
-                    "album_art_uri": self.make_absolute_url(  # noqa: SLF001
-                        meta.get("albumArtURI")
-                    ),
-                }
-
-            except Exception as e:
+                if (
+                    isinstance(meta, dict)
+                    and "artist" not in meta
+                    and "creator" in meta
+                ):
+                    meta["artist"] = meta.get("creator")
+                if isinstance(meta, dict) and "res" not in meta:
+                    track_uris = meta.get("trackURIs")
+                    if isinstance(track_uris, list) and track_uris:
+                        meta["res"] = track_uris[0]
+            except json.JSONDecodeError as json_e:
                 SDK_LOGGER.error(
-                    "Device: Error processing metadata from %s AVTransport event: %s",
+                    "Device: Failed to parse JSON from %s: %s",
                     media_metadata_key,
-                    e,
-                    exc_info=True,
+                    json_e,
                 )
-                raise
+                meta = {}
+            except ET.ParseError as xml_e:
+                SDK_LOGGER.error(
+                    "Device: Failed to parse XML from %s: %s",
+                    media_metadata_key,
+                    xml_e,
+                )
+                meta = {}
+
+            # Update the device's internal current_track_info dictionary
+            self._current_track_info = {
+                "title": meta.get("title"),
+                "artist": meta.get("artist"),
+                "album": meta.get("album"),
+                "uri": meta.get("res"),
+                "duration": (
+                    self.parse_duration(meta.get("duration"))  # noqa: SLF001
+                    if meta.get("duration")
+                    else None
+                ),
+                "albumArtURI": self.make_absolute_url(  # noqa: SLF001
+                    meta.get("albumArtURI")
+                ),
+                "album_art_uri": self.make_absolute_url(  # noqa: SLF001
+                    meta.get("albumArtURI")
+                ),
+            }
 
     async def _http_request(
         self, command: WiimHttpCommand | str, params: str | None = None
@@ -1551,7 +1631,9 @@ class WiimDevice:
                 continue
 
             preset_name = item.get("name", "")
-            title = preset_name.split("_#~", 1)[0] if "_#~" in preset_name else preset_name
+            title = (
+                preset_name.split("_#~", 1)[0] if "_#~" in preset_name else preset_name
+            )
             results.append(
                 WiimPreset(
                     preset_id=int(preset_id),
@@ -1876,9 +1958,7 @@ class WiimDevice:
             or state_device._current_track_info.get("album_art_uri"),
             uri=state_device._current_track_info.get("uri"),
             duration=state_device._current_track_duration
-            or state_device._current_track_info.get(
-                "duration"
-            ),
+            or state_device._current_track_info.get("duration"),
             position=state_device._current_position,
         )
 
