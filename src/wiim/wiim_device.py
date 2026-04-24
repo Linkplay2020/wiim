@@ -754,8 +754,10 @@ class WiimDevice:
                                     AudioOutputHwMode.SPEAKER_OUT.display_name  # type: ignore[attr-defined]
                                 )
                             else:
-                                self._output_mode = self.get_display_name_by_command_str(
-                                    output_mode_val
+                                self._output_mode = (
+                                    self.get_display_name_by_command_str(
+                                        output_mode_val
+                                    )
                                 )
 
                         except ValueError:
@@ -867,7 +869,9 @@ class WiimDevice:
 
                     if action and slave_udn:
                         SDK_LOGGER.debug(
-                            "Device: Detected Slave action=%s for UDN=%s" ,action, slave_udn
+                            "Device: Detected Slave action=%s for UDN=%s",
+                            action,
+                            slave_udn,
                         )
 
                         def restore_uuid(cleaned):
@@ -883,7 +887,8 @@ class WiimDevice:
 
                         if action == "rm":
                             SDK_LOGGER.debug(
-                                "Device: Slave %s removed from group, clearing metadata.", slave_udn_format
+                                "Device: Slave %s removed from group, clearing metadata.",
+                                slave_udn_format,
                             )
                             if self._controller is not None:
                                 removed_device = self._controller.get_device(
@@ -895,7 +900,8 @@ class WiimDevice:
                                 )
                         elif action == "add":
                             SDK_LOGGER.debug(
-                                "Device: Slave %s added to group, triggering full state update for it.", slave_udn_format
+                                "Device: Slave %s added to group, triggering full state update for it.",
+                                slave_udn_format,
                             )
                             if self._controller is not None:
                                 self._controller.add_group_member(
@@ -906,11 +912,13 @@ class WiimDevice:
                     self.slave_udn = slave_udn
         except ET.ParseError as xml_e:
             SDK_LOGGER.warning(
-                "Device: Failed to parse XML for Slave action in RenderingControl event: %s", xml_e
+                "Device: Failed to parse XML for Slave action in RenderingControl event: %s",
+                xml_e,
             )
         except Exception as general_e:
             SDK_LOGGER.error(
-                "Device: Unexpected error processing Slave action in RenderingControl event: %s", general_e,
+                "Device: Unexpected error processing Slave action in RenderingControl event: %s",
+                general_e,
                 exc_info=True,
             )
             raise
@@ -932,7 +940,7 @@ class WiimDevice:
             self._player_properties[PlayerAttribute.PLAYING_STATUS] = (
                 self._playing_status.value
             )
-        
+
         if "CurrentTrackURI" in event_data:
             self._current_track_uri = event_data["CurrentTrackURI"]
         else:
@@ -1046,7 +1054,11 @@ class WiimDevice:
                                 media_metadata_key,
                             )
                             meta = {}
-                if isinstance(meta, dict) and "artist" not in meta and "creator" in meta:
+                if (
+                    isinstance(meta, dict)
+                    and "artist" not in meta
+                    and "creator" in meta
+                ):
                     meta["artist"] = meta.get("creator")
                 if isinstance(meta, dict) and "res" not in meta:
                     track_uris = meta.get("trackURIs")
@@ -1619,7 +1631,9 @@ class WiimDevice:
                 continue
 
             preset_name = item.get("name", "")
-            title = preset_name.split("_#~", 1)[0] if "_#~" in preset_name else preset_name
+            title = (
+                preset_name.split("_#~", 1)[0] if "_#~" in preset_name else preset_name
+            )
             results.append(
                 WiimPreset(
                     preset_id=int(preset_id),
@@ -1944,9 +1958,7 @@ class WiimDevice:
             or state_device._current_track_info.get("album_art_uri"),
             uri=state_device._current_track_info.get("uri"),
             duration=state_device._current_track_duration
-            or state_device._current_track_info.get(
-                "duration"
-            ),
+            or state_device._current_track_info.get("duration"),
             position=state_device._current_position,
         )
 
