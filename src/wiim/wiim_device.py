@@ -1392,12 +1392,7 @@ class WiimDevice:
                 "Attempted to set volume outside 0-100 range: %s", volume_percent
             )
             volume_percent = max(0, min(100, volume_percent))
-        await self._invoke_upnp_action(
-            "RenderingControl",
-            "SetVolume",
-            Channel="Master",
-            DesiredVolume=volume_percent,
-        )
+        await self._http_command_ok(WiimHttpCommand.SET_VOLUME, str(volume_percent))
         self.volume = volume_percent
 
     async def async_set_mute(self, mute: bool) -> None:

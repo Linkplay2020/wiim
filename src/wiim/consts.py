@@ -26,6 +26,7 @@ class WiimHttpCommand(StrEnum):
     PLAYER_STATUS = "getPlayerStatusEx"
     SWITCH_MODE = "setPlayerCmd:switchmode:{}"
     PLAY = "setPlayerCmd:play:{}"
+    SET_VOLUME = "setPlayerCmd:vol:{}"
     MULTIROOM_LIST = "multiroom:getSlaveList"
     MULTIROOM_UNGROUP = "multiroom:Ungroup"
     MULTIROOM_LEAVEGROUP = "multiroom:LeaveGroup"
@@ -215,7 +216,7 @@ class AudioOutputHwMode(IntFlag):
 
 
 CMD_TO_MODE_MAP: dict[int, AudioOutputHwMode] = {
-    member.cmd: member # type: ignore[attr-defined]
+    member.cmd: member  # type: ignore[attr-defined]
     for member in AudioOutputHwMode  # type: ignore[attr-defined]
 }
 
