@@ -385,6 +385,10 @@ class WiimDevice:
                                 f"{assigned_port}..{assigned_port + 255}"
                             )
                         self._event_handler = self._notify_server.event_handler
+                        if self._event_handler is None:
+                            raise WiimDeviceException(
+                                f"Device {self.name}: notify server has no event handler."
+                            )
                         self._event_handler._notify_server = self._notify_server
                         self.logger.info(
                             "Notify server started at %s (override for device: %s)",
@@ -406,7 +410,7 @@ class WiimDevice:
                         )
                         self._event_handler_started = False
 
-                if self._event_handler_started:
+                if self._event_handler_started and self._event_handler:
                     if self.av_transport:
                         self.av_transport.on_event = (
                             self._internal_handle_av_transport_event

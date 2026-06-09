@@ -31,7 +31,7 @@ def _build_upnp_device(
     upnp_device.model_name = model_name
     upnp_device.device_url = f"http://{ip_address}:49152/description.xml"
 
-    def _build_service():
+    def _build_service() -> MagicMock:
         service = MagicMock()
         service.has_action.return_value = True
         actions: dict[str, AsyncMock] = {}
