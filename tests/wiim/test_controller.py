@@ -240,7 +240,7 @@ class TestWiimController:
 
         formatted_udn = "leaderudnfull111111111111"
         with patch.object(controller, "_restore_full_udn", return_value=leader.udn):
-            await controller.async_join_group(leader.udn, follower.udn)
+            await controller.async_join_group(leader.udn, [follower.udn])
 
             expected_command = WiimHttpCommand.MULTIROOM_JOIN.format(
                 leader.ip_address, formatted_udn

@@ -1,4 +1,6 @@
 # test_wiim_device.py
+from dataclasses import asdict
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from wiim.wiim_device import WiimDevice
@@ -134,12 +136,6 @@ class TestWiimDevice:
         await device.async_pause()
         device.av_transport.action("Pause").async_call.assert_called_with(InstanceID=0)
 
-        # Test Set Volume
-        await device.async_set_volume(75)
-        device.rendering_control.action("SetVolume").async_call.assert_called_with(
-            InstanceID=0, Channel="Master", DesiredVolume=75
-        )
-
         # Test Mute
         await device.async_set_mute(True)
         device.rendering_control.action("SetMute").async_call.assert_called_with(
@@ -166,6 +162,8 @@ class TestWiimDevice:
         device._http_command_ok.assert_called_with(
             WiimHttpCommand.SWITCH_MODE, "line-in"
         )
+        await device.async_set_volume(75)
+        device._http_command_ok.assert_called_with(WiimHttpCommand.SET_VOLUME, "75")
 
     def test_parse_duration(self, mock_upnp_device, mock_session):
         """Test the parsing of various duration string formats."""
@@ -208,6 +206,35 @@ class TestWiimDevice:
         assert media.duration == 210
         assert media.position == 15
         assert device.album_art_uri == "https://example.com/art.jpg"
+
+    def test_as_diagnostics_returns_stable_device_snapshot(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test diagnostics expose safe runtime data without session objects."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device._device_info_properties[DeviceAttribute.FIRMWARE] = "4.8.123456"
+        device.volume = 35
+        device.is_muted = True
+        device._event_handler_started = True
+        device._supported_model_name = MagicMock(return_value="WiiM Pro")
+        mock_upnp_device.available = True
+
+        diagnostics = device.as_diagnostics()
+
+        assert diagnostics.name == "WiiM Test Device"
+        assert diagnostics.udn == "uuid:12345678-1234-1234-1234-1234567890ab"
+        assert diagnostics.model_name == "WiiM Pro"
+        assert diagnostics.manufacturer == "Linkplay"
+        assert diagnostics.firmware_version == "4.8.123456"
+        assert diagnostics.available is True
+        assert diagnostics.supports_http_api is True
+        assert diagnostics.event_subscriptions_active is True
+        assert diagnostics.input_modes
+        assert diagnostics.output_modes
+        assert diagnostics.volume == 35
+        assert diagnostics.muted is True
+        assert "session" not in asdict(diagnostics)
 
     def test_loop_state_helpers(self, mock_upnp_device, mock_session):
         """Test normalized loop mode helpers."""
@@ -413,9 +440,11 @@ class TestWiimDevice:
         leader.attach_controller(controller)
         follower.attach_controller(controller)
         leader._http_api = AsyncMock(spec=WiimApiEndpoint)
+        follower._http_api = AsyncMock(spec=WiimApiEndpoint)
         leader._invoke_upnp_action = AsyncMock(return_value={})
         follower._invoke_upnp_action = AsyncMock(return_value={})
         leader._http_command_ok = AsyncMock(return_value={})
+        follower._http_command_ok = AsyncMock(return_value={})
 
         follower.async_play = AsyncMock(wraps=follower.async_play)
         leader.async_play = AsyncMock(wraps=leader.async_play)
@@ -448,5 +477,8 @@ class TestWiimDevice:
         leader.async_set_loop_mode.assert_awaited_once_with(repeat_all_shuffle)
         follower.async_set_volume.assert_awaited_once_with(35)
         follower.async_set_mute.assert_awaited_once_with(True)
+        follower._http_command_ok.assert_awaited_once_with(
+            WiimHttpCommand.SET_VOLUME, "35"
+        )
         leader.async_set_volume.assert_not_awaited()
         leader.async_set_mute.assert_not_awaited()

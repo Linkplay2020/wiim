@@ -52,6 +52,7 @@ from .exceptions import WiimDeviceException, WiimRequestException
 from .handler import parse_last_change_event
 from .manufacturers import get_info_from_project
 from .models import (
+    WiimDeviceDiagnostics,
     WiimGroupRole,
     WiimLoopState,
     WiimMediaMetadata,
@@ -202,6 +203,27 @@ class WiimDevice:
     def attach_controller(self, controller: WiimController | None) -> None:
         """Attach or detach the managing controller for group-aware behavior."""
         self._controller = controller
+
+    def as_diagnostics(self) -> WiimDeviceDiagnostics:
+        """Return a stable diagnostics snapshot for integration consumers."""
+        return WiimDeviceDiagnostics(
+            name=self.name,
+            udn=self.udn,
+            model_name=self.model_name,
+            manufacturer=self.manufacturer,
+            firmware_version=self.firmware_version,
+            ip_address=self.ip_address,
+            available=self.available,
+            supports_http_api=self.supports_http_api,
+            presentation_url_available=self.presentation_url is not None,
+            event_subscriptions_active=self._event_handler_started,
+            input_modes=tuple(self.supported_input_modes),
+            output_modes=tuple(self.supported_output_modes),
+            play_mode=self.play_mode,
+            output_mode=self.output_mode,
+            volume=self.volume,
+            muted=self.is_muted,
+        )
 
     def _resolve_group_device(
         self,

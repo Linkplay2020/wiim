@@ -105,3 +105,25 @@ class WiimProbeResult:
     model: str
     host: str
     location: str
+
+
+@dataclass(frozen=True, slots=True)
+class WiimDeviceDiagnostics:
+    """Stable device diagnostics exposed by the SDK."""
+
+    name: str
+    udn: str
+    model_name: str
+    manufacturer: str | None
+    firmware_version: str | None
+    ip_address: str | None
+    available: bool
+    supports_http_api: bool
+    presentation_url_available: bool
+    event_subscriptions_active: bool
+    input_modes: tuple[str, ...]
+    output_modes: tuple[str, ...]
+    play_mode: str
+    output_mode: str | None
+    volume: int
+    muted: bool
