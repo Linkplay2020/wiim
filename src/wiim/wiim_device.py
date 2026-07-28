@@ -1012,117 +1012,170 @@ class WiimDevice:
             media_metadata_key = "CurrentTrackMetaData"
 
         if media_metadata_key:
-            try:
-                meta = event_data[media_metadata_key]
-                if isinstance(meta, str):
-                    raw_meta = unescape(meta).strip()
-                    if raw_meta.startswith("{") or raw_meta.startswith("["):
-                        SDK_LOGGER.debug(
-                            "Device: %s is raw JSON in event. Attempting to parse.",
-                            media_metadata_key,
-                        )
-                        parsed_meta = json.loads(raw_meta)
-                        if isinstance(parsed_meta, dict):
-                            meta = parsed_meta
-                        else:
-                            SDK_LOGGER.warning(
-                                "Device: %s JSON payload is not an object.",
-                                media_metadata_key,
-                            )
-                            meta = {}
+            self._current_track_info = self._parse_track_metadata(
+                event_data[media_metadata_key], media_metadata_key
+            )
+
+    def _parse_track_metadata(self, payload: Any, source_key: str) -> dict[str, Any]:
+        """
+        Normalize a DIDL-Lite or JSON media metadata payload into track info.
+
+        Shared by the AVTransport eventing path and the GetInfoEx polling path so
+        both produce identically shaped data. Always returns the full track-info
+        dict; individual values are None when the payload omits or fails to parse
+        them.
+        """
+        meta: Any = payload
+        try:
+            if isinstance(meta, str):
+                raw_meta = unescape(meta).strip()
+                if raw_meta.startswith("{") or raw_meta.startswith("["):
+                    SDK_LOGGER.debug(
+                        "Device: %s is raw JSON. Attempting to parse.",
+                        source_key,
+                    )
+                    parsed_meta = json.loads(raw_meta)
+                    if isinstance(parsed_meta, dict):
+                        meta = parsed_meta
                     else:
                         SDK_LOGGER.warning(
-                            "Device: %s is raw XML in event, not parsed by SDK. Attempting to parse.",
-                            media_metadata_key,
+                            "Device: %s JSON payload is not an object.",
+                            source_key,
                         )
-                        root = ET.fromstring(raw_meta)
-                        didl_ns = {
-                            "didl": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
-                            "dc": "http://purl.org/dc/elements/1.1/",
-                            "upnp": "urn:schemas-upnp-org:metadata-1-0/upnp/",
+                        meta = {}
+                else:
+                    SDK_LOGGER.warning(
+                        "Device: %s is raw XML, not parsed by SDK. Attempting to parse.",
+                        source_key,
+                    )
+                    root = ET.fromstring(raw_meta)
+                    didl_ns = {
+                        "didl": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
+                        "dc": "http://purl.org/dc/elements/1.1/",
+                        "upnp": "urn:schemas-upnp-org:metadata-1-0/upnp/",
+                    }
+                    item_elem = root.find("didl:item", namespaces=didl_ns)
+                    if item_elem is not None:
+                        res_elem = item_elem.find("res", namespaces=didl_ns)
+                    else:
+                        res_elem = None
+
+                    duration_str = (
+                        res_elem.get("duration", "") if res_elem is not None else ""
+                    )
+                    try:
+                        duration = int(duration_str) if duration_str else 0
+                    except ValueError:
+                        duration = 0
+
+                    if item_elem is not None:
+                        meta = {
+                            "title": item_elem.findtext(
+                                "dc:title", default="", namespaces=didl_ns
+                            ),
+                            "artist": item_elem.findtext(
+                                "upnp:artist", default="", namespaces=didl_ns
+                            ),
+                            "album": item_elem.findtext(
+                                "upnp:album", default="", namespaces=didl_ns
+                            ),
+                            "albumArtURI": item_elem.findtext(
+                                "upnp:albumArtURI", default="", namespaces=didl_ns
+                            ),
+                            "res": item_elem.findtext(
+                                "res", default="", namespaces=didl_ns
+                            ),
+                            "duration": duration,
                         }
-                        item_elem = root.find("didl:item", namespaces=didl_ns)
-                        if item_elem is not None:
-                            res_elem = item_elem.find("res", namespaces=didl_ns)
-                        else:
-                            res_elem = None
-
-                        duration_str = (
-                            res_elem.get("duration", "") if res_elem is not None else ""
+                    else:
+                        SDK_LOGGER.warning(
+                            "Device: No 'item' element found in parsed %s XML.",
+                            source_key,
                         )
-                        try:
-                            duration = int(duration_str) if duration_str else 0
-                        except ValueError:
-                            duration = 0
+                        meta = {}
+            if isinstance(meta, dict) and "artist" not in meta and "creator" in meta:
+                meta["artist"] = meta.get("creator")
+            if isinstance(meta, dict) and "res" not in meta:
+                track_uris = meta.get("trackURIs")
+                if isinstance(track_uris, list) and track_uris:
+                    meta["res"] = track_uris[0]
+        except json.JSONDecodeError as json_e:
+            SDK_LOGGER.error(
+                "Device: Failed to parse JSON from %s: %s",
+                source_key,
+                json_e,
+            )
+            meta = {}
+        except ET.ParseError as xml_e:
+            SDK_LOGGER.error(
+                "Device: Failed to parse XML from %s: %s",
+                source_key,
+                xml_e,
+            )
+            meta = {}
 
-                        if item_elem:
-                            meta = {
-                                "title": item_elem.findtext(
-                                    "dc:title", default="", namespaces=didl_ns
-                                ),
-                                "artist": item_elem.findtext(
-                                    "upnp:artist", default="", namespaces=didl_ns
-                                ),
-                                "album": item_elem.findtext(
-                                    "upnp:album", default="", namespaces=didl_ns
-                                ),
-                                "albumArtURI": item_elem.findtext(
-                                    "upnp:albumArtURI", default="", namespaces=didl_ns
-                                ),
-                                "res": item_elem.findtext(
-                                    "res", default="", namespaces=didl_ns
-                                ),
-                                "duration": duration,
-                            }
-                        else:
-                            SDK_LOGGER.warning(
-                                "Device: No 'item' element found in parsed %s XML.",
-                                media_metadata_key,
-                            )
-                            meta = {}
-                if (
-                    isinstance(meta, dict)
-                    and "artist" not in meta
-                    and "creator" in meta
-                ):
-                    meta["artist"] = meta.get("creator")
-                if isinstance(meta, dict) and "res" not in meta:
-                    track_uris = meta.get("trackURIs")
-                    if isinstance(track_uris, list) and track_uris:
-                        meta["res"] = track_uris[0]
-            except json.JSONDecodeError as json_e:
-                SDK_LOGGER.error(
-                    "Device: Failed to parse JSON from %s: %s",
-                    media_metadata_key,
-                    json_e,
-                )
-                meta = {}
-            except ET.ParseError as xml_e:
-                SDK_LOGGER.error(
-                    "Device: Failed to parse XML from %s: %s",
-                    media_metadata_key,
-                    xml_e,
-                )
-                meta = {}
+        if not isinstance(meta, dict):
+            SDK_LOGGER.warning(
+                "Device: %s payload is not a mapping (%s); ignoring.",
+                source_key,
+                type(meta).__name__,
+            )
+            meta = {}
 
-            # Update the device's internal current_track_info dictionary
-            self._current_track_info = {
-                "title": meta.get("title"),
-                "artist": meta.get("artist"),
-                "album": meta.get("album"),
-                "uri": meta.get("res"),
-                "duration": (
-                    self.parse_duration(meta.get("duration"))  # noqa: SLF001
-                    if meta.get("duration")
-                    else None
-                ),
-                "albumArtURI": self.make_absolute_url(  # noqa: SLF001
-                    meta.get("albumArtURI")
-                ),
-                "album_art_uri": self.make_absolute_url(  # noqa: SLF001
-                    meta.get("albumArtURI")
-                ),
-            }
+        return {
+            "title": meta.get("title"),
+            "artist": meta.get("artist"),
+            "album": meta.get("album"),
+            "uri": meta.get("res"),
+            "duration": (
+                self.parse_duration(meta.get("duration"))  # noqa: SLF001
+                if meta.get("duration")
+                else None
+            ),
+            "albumArtURI": self.make_absolute_url(  # noqa: SLF001
+                meta.get("albumArtURI")
+            ),
+            "album_art_uri": self.make_absolute_url(  # noqa: SLF001
+                meta.get("albumArtURI")
+            ),
+        }
+
+    @staticmethod
+    def _track_metadata_is_populated(track_info: dict[str, Any]) -> bool:
+        """Return True if normalized track info carries at least one usable field."""
+        return any(
+            track_info.get(field)
+            for field in ("title", "artist", "album", "albumArtURI")
+        )
+
+    def _apply_polled_track_metadata(self, media_info: dict[str, Any]) -> None:
+        """
+        Populate track info from a polled GetInfoEx response.
+
+        Some devices never emit AVTransport LastChange events carrying
+        AVTransportURIMetaData/CurrentTrackMetaData, so the eventing path alone
+        leaves media metadata permanently empty. GetInfoEx returns the same
+        DIDL-Lite payload under "TrackMetaData" on every poll, at no extra
+        request cost.
+
+        Only applied when the payload actually yields something: a device that
+        returns an empty or unparseable TrackMetaData can never clobber metadata
+        already delivered by eventing.
+        """
+        raw_meta = media_info.get("TrackMetaData")
+        if not raw_meta:
+            return
+
+        track_info = self._parse_track_metadata(raw_meta, "TrackMetaData")
+        if not self._track_metadata_is_populated(track_info):
+            return
+
+        if track_info != self._current_track_info:
+            SDK_LOGGER.debug(
+                "Device %s: Track metadata refreshed from polled GetInfoEx.",
+                self.name,
+            )
+        self._current_track_info = track_info
 
     async def _http_request(
         self, command: WiimHttpCommand | str, params: str | None = None
@@ -1550,6 +1603,8 @@ class WiimDevice:
         media_info = await self.async_set_AVT_cmd(WiimHttpCommand.MEDIA_INFO)
         if not isinstance(media_info, dict):
             return WiimTransportCapabilities()
+
+        self._apply_polled_track_metadata(media_info)
 
         play_medium = media_info.get("PlayMedium")
         if not isinstance(play_medium, str):
