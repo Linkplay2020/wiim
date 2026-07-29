@@ -1028,7 +1028,13 @@ class WiimDevice:
         meta: Any = payload
         try:
             if isinstance(meta, str):
-                raw_meta = unescape(meta).strip()
+                # Event payloads arrive XML-escaped inside LastChange; polled
+                # GetInfoEx payloads arrive already decoded. Only unescape when
+                # the payload does not already start like markup or JSON --
+                # unescaping decoded XML corrupts any literal &amp; in it.
+                raw_meta = meta.strip()
+                if raw_meta[:1] not in ("<", "{", "["):
+                    raw_meta = unescape(raw_meta).strip()
                 if raw_meta.startswith("{") or raw_meta.startswith("["):
                     SDK_LOGGER.debug(
                         "Device: %s is raw JSON. Attempting to parse.",
@@ -1048,7 +1054,10 @@ class WiimDevice:
                         "Device: %s is raw XML, not parsed by SDK. Attempting to parse.",
                         source_key,
                     )
-                    root = ET.fromstring(raw_meta)
+                    try:
+                        root = ET.fromstring(raw_meta)
+                    except ET.ParseError:
+                        root = ET.fromstring(unescape(raw_meta))
                     didl_ns = {
                         "didl": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
                         "dc": "http://purl.org/dc/elements/1.1/",

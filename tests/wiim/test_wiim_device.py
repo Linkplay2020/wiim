@@ -369,6 +369,55 @@ class TestWiimDevice:
 
         assert device._current_track_info == before
 
+    @pytest.mark.parametrize(
+        ("payload", "expected_art"),
+        [
+            pytest.param(
+                (
+                    '<?xml version="1.0"?>'
+                    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
+                    ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"'
+                    ' xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+                    '<item id="0">'
+                    "<dc:title>Song</dc:title>"
+                    "<upnp:albumArtURI>https://example.com/art.jpg?a=1&amp;b=2"
+                    "</upnp:albumArtURI>"
+                    "</item></DIDL-Lite>"
+                ),
+                "https://example.com/art.jpg?a=1&b=2",
+                id="decoded-with-ampersand",
+            ),
+            pytest.param(
+                (
+                    "&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot;"
+                    " xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot;"
+                    " xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;"
+                    "&lt;item id=&quot;0&quot;&gt;"
+                    "&lt;dc:title&gt;Song&lt;/dc:title&gt;"
+                    "&lt;upnp:albumArtURI&gt;https://example.com/art.jpg"
+                    "&lt;/upnp:albumArtURI&gt;"
+                    "&lt;/item&gt;&lt;/DIDL-Lite&gt;"
+                ),
+                "https://example.com/art.jpg",
+                id="escaped-event-payload",
+            ),
+        ],
+    )
+    def test_parse_track_metadata_escaping_variants(
+        self, mock_upnp_device, mock_session, payload, expected_art
+    ):
+        """Test decoded payloads keep entities intact and escaped ones still parse.
+
+        Polled GetInfoEx metadata arrives already decoded; unconditionally
+        unescaping it corrupted any literal &amp; and the parse failed.
+        """
+        device = WiimDevice(mock_upnp_device, mock_session)
+
+        parsed = device._parse_track_metadata(payload, "TrackMetaData")
+
+        assert parsed["title"] == "Song"
+        assert parsed["albumArtURI"] == expected_art
+
     def test_parse_track_metadata_reads_item_without_child_elements(
         self, mock_upnp_device, mock_session
     ):
