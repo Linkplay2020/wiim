@@ -1017,21 +1017,12 @@ class WiimDevice:
             )
 
     def _parse_track_metadata(self, payload: Any, source_key: str) -> dict[str, Any]:
-        """
-        Normalize a DIDL-Lite or JSON media metadata payload into track info.
-
-        Shared by the AVTransport eventing path and the GetInfoEx polling path so
-        both produce identically shaped data. Always returns the full track-info
-        dict; individual values are None when the payload omits or fails to parse
-        them.
-        """
+        """Normalize a DIDL-Lite or JSON metadata payload into track info."""
         meta: Any = payload
         try:
             if isinstance(meta, str):
-                # Event payloads arrive XML-escaped inside LastChange; polled
-                # GetInfoEx payloads arrive already decoded. Only unescape when
-                # the payload does not already start like markup or JSON --
-                # unescaping decoded XML corrupts any literal &amp; in it.
+                # LastChange event payloads arrive XML-escaped; polled payloads
+                # are already decoded and unescaping them corrupts literal &amp;.
                 raw_meta = meta.strip()
                 if raw_meta[:1] not in ("<", "{", "["):
                     raw_meta = unescape(raw_meta).strip()
@@ -1151,26 +1142,14 @@ class WiimDevice:
 
     @staticmethod
     def _track_metadata_is_populated(track_info: dict[str, Any]) -> bool:
-        """Return True if normalized track info carries at least one usable field."""
+        """Return True if track info carries at least one usable field."""
         return any(
             track_info.get(field)
             for field in ("title", "artist", "album", "albumArtURI")
         )
 
     def _apply_polled_track_metadata(self, media_info: dict[str, Any]) -> None:
-        """
-        Populate track info from a polled GetInfoEx response.
-
-        Some devices never emit AVTransport LastChange events carrying
-        AVTransportURIMetaData/CurrentTrackMetaData, so the eventing path alone
-        leaves media metadata permanently empty. GetInfoEx returns the same
-        DIDL-Lite payload under "TrackMetaData" on every poll, at no extra
-        request cost.
-
-        Only applied when the payload actually yields something: a device that
-        returns an empty or unparseable TrackMetaData can never clobber metadata
-        already delivered by eventing.
-        """
+        """Populate track info from polled metadata without clobbering events."""
         raw_meta = media_info.get("TrackMetaData")
         if not raw_meta:
             return

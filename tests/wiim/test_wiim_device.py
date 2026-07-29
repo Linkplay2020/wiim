@@ -15,9 +15,7 @@ from wiim.consts import (
 )
 from wiim.models import WiimGroupRole, WiimGroupSnapshot, WiimRepeatMode
 
-# Trimmed from a real WiiM Pro response. The same DIDL-Lite payload is delivered
-# by AVTransport LastChange events and by the polled GetInfoEx action, under
-# CurrentTrackMetaData and TrackMetaData respectively.
+# DIDL-Lite as delivered by both LastChange events and the GetInfoEx action.
 _DIDL_LITE_TRACK = (
     '<?xml version="1.0"?>'
     '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
@@ -310,11 +308,7 @@ class TestWiimDevice:
     async def test_polled_media_info_populates_track_info(
         self, mock_upnp_device, mock_session
     ):
-        """Test GetInfoEx TrackMetaData populates track info without eventing.
-
-        Some devices never emit AVTransportURIMetaData/CurrentTrackMetaData, so
-        the polled response is the only source of media metadata.
-        """
+        """Test GetInfoEx TrackMetaData populates track info without eventing."""
         device = WiimDevice(mock_upnp_device, mock_session)
         device._http_api = AsyncMock(spec=WiimApiEndpoint)
         device.async_set_AVT_cmd = AsyncMock(
@@ -406,11 +400,7 @@ class TestWiimDevice:
     def test_parse_track_metadata_escaping_variants(
         self, mock_upnp_device, mock_session, payload, expected_art
     ):
-        """Test decoded payloads keep entities intact and escaped ones still parse.
-
-        Polled GetInfoEx metadata arrives already decoded; unconditionally
-        unescaping it corrupted any literal &amp; and the parse failed.
-        """
+        """Test decoded payloads keep entities intact and escaped ones parse."""
         device = WiimDevice(mock_upnp_device, mock_session)
 
         parsed = device._parse_track_metadata(payload, "TrackMetaData")
@@ -421,11 +411,7 @@ class TestWiimDevice:
     def test_parse_track_metadata_reads_item_without_child_elements(
         self, mock_upnp_device, mock_session
     ):
-        """Test a DIDL item carrying only attributes is not silently dropped.
-
-        `if item_elem:` relied on Element truthiness, which is len(el) != 0, so
-        an item with no child elements parsed to an empty dict.
-        """
+        """Test a DIDL item carrying only attributes is not silently dropped."""
         device = WiimDevice(mock_upnp_device, mock_session)
         didl = (
             '<?xml version="1.0"?>'
