@@ -1050,7 +1050,7 @@ class WiimDevice:
                         )
                         meta = {}
                 else:
-                    SDK_LOGGER.warning(
+                    SDK_LOGGER.debug(
                         "Device: %s is raw XML, not parsed by SDK. Attempting to parse.",
                         source_key,
                     )
