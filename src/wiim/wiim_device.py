@@ -1148,8 +1148,13 @@ class WiimDevice:
             for field in ("title", "artist", "album", "albumArtURI")
         )
 
-    def _apply_polled_track_metadata(self, media_info: dict[str, Any]) -> None:
+    def _apply_polled_track_metadata(
+        self, media_info: dict[str, Any], known_track_info: dict[str, Any]
+    ) -> None:
         """Populate track info from polled metadata without clobbering events."""
+        if self._current_track_info is not known_track_info:
+            return
+
         raw_meta = media_info.get("TrackMetaData")
         if not raw_meta:
             return
@@ -1588,11 +1593,12 @@ class WiimDevice:
         if not self.supports_http_api:
             return WiimTransportCapabilities()
 
+        known_track_info = self._current_track_info
         media_info = await self.async_set_AVT_cmd(WiimHttpCommand.MEDIA_INFO)
         if not isinstance(media_info, dict):
             return WiimTransportCapabilities()
 
-        self._apply_polled_track_metadata(media_info)
+        self._apply_polled_track_metadata(media_info, known_track_info)
 
         play_medium = media_info.get("PlayMedium")
         if not isinstance(play_medium, str):

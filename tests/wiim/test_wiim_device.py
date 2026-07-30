@@ -34,6 +34,22 @@ _DIDL_LITE_TRACK = (
     "</DIDL-Lite>"
 )
 
+_DIDL_LITE_NEXT_TRACK = (
+    '<?xml version="1.0"?>'
+    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"'
+    ' xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+    "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+    '<item id="0">'
+    "<dc:title>Smooth Criminal</dc:title>"
+    "<dc:creator>Michael Jackson</dc:creator>"
+    "<upnp:artist>Michael Jackson</upnp:artist>"
+    "<upnp:album>Bad</upnp:album>"
+    "<upnp:albumArtURI>https://example.com/next.jpg</upnp:albumArtURI>"
+    "</item>"
+    "</DIDL-Lite>"
+)
+
 
 def _build_upnp_device(
     *,
@@ -362,6 +378,57 @@ class TestWiimDevice:
         await device.async_get_transport_capabilities()
 
         assert device._current_track_info == before
+
+    @pytest.mark.asyncio
+    async def test_polled_media_info_yields_to_event_arriving_mid_request(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test an event during the request wins over the older polled reply."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device._update_state_from_av_transport_event_data(
+            {"CurrentTrackMetaData": _DIDL_LITE_TRACK}
+        )
+
+        async def _reply_after_track_change(*args, **kwargs):
+            device._update_state_from_av_transport_event_data(
+                {"CurrentTrackMetaData": _DIDL_LITE_NEXT_TRACK}
+            )
+            return {
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+                "TrackMetaData": _DIDL_LITE_TRACK,
+            }
+
+        device.async_set_AVT_cmd = AsyncMock(side_effect=_reply_after_track_change)
+        await device.async_get_transport_capabilities()
+
+        assert device._current_track_info["title"] == "Smooth Criminal"
+        assert (
+            device._current_track_info["albumArtURI"] == "https://example.com/next.jpg"
+        )
+
+    @pytest.mark.asyncio
+    async def test_polled_media_info_applies_when_no_event_intervenes(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test the identity guard still lets an uncontested poll through."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device._update_state_from_av_transport_event_data(
+            {"CurrentTrackMetaData": _DIDL_LITE_NEXT_TRACK}
+        )
+
+        device.async_set_AVT_cmd = AsyncMock(
+            return_value={
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+                "TrackMetaData": _DIDL_LITE_TRACK,
+            }
+        )
+        await device.async_get_transport_capabilities()
+
+        assert device._current_track_info["title"] == "Man in the Mirror"
 
     @pytest.mark.parametrize(
         ("payload", "expected_art"),
