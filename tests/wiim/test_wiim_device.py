@@ -29,7 +29,8 @@ def _build_upnp_device(
     upnp_device.friendly_name = name
     upnp_device.manufacturer = "Linkplay"
     upnp_device.model_name = model_name
-    upnp_device.device_url = f"http://{ip_address}:49152/description.xml"
+    host = f"[{ip_address}]" if ":" in ip_address else ip_address
+    upnp_device.device_url = f"http://{host}:49152/description.xml"
 
     def _build_service() -> MagicMock:
         service = MagicMock()
@@ -164,6 +165,37 @@ class TestWiimDevice:
         )
         await device.async_set_volume(75)
         device._http_command_ok.assert_called_with(WiimHttpCommand.SET_VOLUME, "75")
+
+    @pytest.mark.parametrize(
+        ("device_ip", "expected_port", "expected_source_ip"),
+        [
+            pytest.param("192.168.1.100", 50100, "0.0.0.0", id="ipv4"),
+            pytest.param("2001:db8::5", 50005, "::", id="ipv6"),
+            pytest.param("wiim.local", 50000, "0.0.0.0", id="hostname"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_event_listener_source_matches_device_family(
+        self,
+        mock_session,
+        device_ip,
+        expected_port,
+        expected_source_ip,
+    ):
+        """Test the notify server binds an address family the device can reach."""
+        upnp_device = _build_upnp_device(
+            udn="uuid:test", name="WiiM", ip_address=device_ip
+        )
+        device = WiimDevice(upnp_device, mock_session)
+
+        with patch("wiim.wiim_device.AiohttpNotifyServer") as notify_server:
+            notify_server.return_value.async_start_server = AsyncMock()
+            await device.async_init_services_and_subscribe()
+
+        assert notify_server.call_args.kwargs["source"] == (
+            expected_source_ip,
+            expected_port,
+        )
 
     def test_parse_duration(self, mock_upnp_device, mock_session):
         """Test the parsing of various duration string formats."""

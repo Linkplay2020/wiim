@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from urllib.parse import urlparse, urljoin
 from datetime import timedelta
 import xml.etree.ElementTree as ET
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from html import unescape
 from contextlib import suppress
 import time
@@ -279,13 +280,15 @@ class WiimDevice:
                 loop = asyncio.get_event_loop()
                 local_ip = self.local_host
                 device_ip = self.ip_address
-                if device_ip:
-                    last_octet = int(device_ip.split(".")[-1])
+                device_address = self._parse_ip_address(device_ip)
+                if device_address is not None:
+                    last_octet = device_address.packed[-1]
                 else:
                     last_octet = 0
                 base_port = 50000
                 assigned_port = base_port + last_octet
-                source_ip = local_ip or "0.0.0.0"
+                is_ipv6 = device_address is not None and device_address.version == 6
+                source_ip = local_ip or ("::" if is_ipv6 else "0.0.0.0")
                 source = (source_ip, assigned_port)
 
                 if self.av_transport:
@@ -2017,6 +2020,16 @@ class WiimDevice:
             loop_mode,
             WiimLoopState(repeat=WiimRepeatMode.OFF, shuffle=False),
         )
+
+    @staticmethod
+    def _parse_ip_address(host: str | None) -> IPv4Address | IPv6Address | None:
+        """Return the device address, or None if it is not a literal address."""
+        if not host:
+            return None
+        try:
+            return ip_address(host)
+        except ValueError:
+            return None
 
     @staticmethod
     def build_loop_mode(repeat: WiimRepeatMode, shuffle: bool) -> LoopMode:
