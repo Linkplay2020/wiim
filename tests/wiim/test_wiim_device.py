@@ -34,6 +34,7 @@ _DIDL_LITE_TRACK = (
     "</DIDL-Lite>"
 )
 
+# The track an event switches to while a GetInfoEx request is still in flight.
 _DIDL_LITE_NEXT_TRACK = (
     '<?xml version="1.0"?>'
     '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
@@ -391,6 +392,8 @@ class TestWiimDevice:
         )
 
         async def _reply_after_track_change(*args, **kwargs):
+            # The event handler is synchronous, so it lands while this request
+            # is outstanding; the reply still describes the earlier track.
             device._update_state_from_av_transport_event_data(
                 {"CurrentTrackMetaData": _DIDL_LITE_NEXT_TRACK}
             )
