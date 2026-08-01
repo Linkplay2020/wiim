@@ -1,4 +1,5 @@
 # test_wiim_device.py
+import logging
 from dataclasses import asdict
 
 import pytest
@@ -50,6 +51,11 @@ _DIDL_LITE_NEXT_TRACK = (
     "</item>"
     "</DIDL-Lite>"
 )
+
+
+def _logged_missing_item(caplog) -> bool:
+    """Return True if the parser reported a missing DIDL item."""
+    return any("No 'item' element" in r.getMessage() for r in caplog.records)
 
 
 def _build_upnp_device(
@@ -479,28 +485,35 @@ class TestWiimDevice:
         assert parsed["albumArtURI"] == expected_art
 
     def test_parse_track_metadata_reads_item_without_child_elements(
-        self, mock_upnp_device, mock_session
+        self, mock_upnp_device, mock_session, caplog
     ):
-        """Test a DIDL item carrying only attributes is not silently dropped."""
+        """Test a DIDL item carrying only attributes is not read as missing."""
         device = WiimDevice(mock_upnp_device, mock_session)
-        didl = (
+        header = (
             '<?xml version="1.0"?>'
             '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
-            '<item id="0"/>'
-            "</DIDL-Lite>"
         )
 
-        parsed = device._parse_track_metadata(didl, "CurrentTrackMetaData")
+        with caplog.at_level(logging.WARNING, logger="wiim.sdk"):
+            present = device._parse_track_metadata(
+                f'{header}<item id="0"/></DIDL-Lite>', "CurrentTrackMetaData"
+            )
+            warned_on_present = _logged_missing_item(caplog)
+            caplog.clear()
+            absent = device._parse_track_metadata(
+                f"{header}</DIDL-Lite>", "CurrentTrackMetaData"
+            )
+            warned_on_absent = _logged_missing_item(caplog)
 
-        assert set(parsed) == {
-            "title",
-            "artist",
-            "album",
-            "uri",
-            "duration",
-            "albumArtURI",
-            "album_art_uri",
-        }
+        # An item that is present but carries no children reads as empty fields;
+        # only a genuinely absent item leaves them unset.
+        assert present["title"] == ""
+        assert present["uri"] == ""
+        assert absent["title"] is None
+        assert absent["uri"] is None
+        assert present != absent
+        assert not warned_on_present
+        assert warned_on_absent
 
     @pytest.mark.asyncio
     async def test_async_get_presets(self, mock_upnp_device, mock_session):
