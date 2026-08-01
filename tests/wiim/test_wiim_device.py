@@ -35,7 +35,8 @@ _DIDL_LITE_TRACK = (
     "</DIDL-Lite>"
 )
 
-# The track an event switches to while a GetInfoEx request is still in flight.
+# The track that follows _DIDL_LITE_TRACK, for tests that need a second,
+# unambiguously later track.
 _DIDL_LITE_NEXT_TRACK = (
     '<?xml version="1.0"?>'
     '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
@@ -425,19 +426,24 @@ class TestWiimDevice:
         device = WiimDevice(mock_upnp_device, mock_session)
         device._http_api = AsyncMock(spec=WiimApiEndpoint)
         device._update_state_from_av_transport_event_data(
-            {"CurrentTrackMetaData": _DIDL_LITE_NEXT_TRACK}
+            {"CurrentTrackMetaData": _DIDL_LITE_TRACK}
         )
 
+        # The track advanced with no event to report it, so the polled reply is
+        # the newer of the two.
         device.async_set_AVT_cmd = AsyncMock(
             return_value={
                 "PlayMedium": "SONGLIST-NETWORK",
                 "TrackSource": "Pandora2",
-                "TrackMetaData": _DIDL_LITE_TRACK,
+                "TrackMetaData": _DIDL_LITE_NEXT_TRACK,
             }
         )
         await device.async_get_transport_capabilities()
 
-        assert device._current_track_info["title"] == "Man in the Mirror"
+        assert device._current_track_info["title"] == "Smooth Criminal"
+        assert (
+            device._current_track_info["albumArtURI"] == "https://example.com/next.jpg"
+        )
 
     @pytest.mark.parametrize(
         ("payload", "expected_art"),
