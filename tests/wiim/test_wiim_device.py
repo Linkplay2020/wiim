@@ -436,14 +436,18 @@ class TestWiimDevice:
                 "PlayMedium": "SONGLIST-NETWORK",
                 "TrackSource": "Pandora2",
                 "TrackMetaData": _DIDL_LITE_NEXT_TRACK,
+                "TrackURI": "https://example.com/next.mp3",
+                "TrackDuration": "00:04:52",
             }
         )
         await device.async_get_transport_capabilities()
 
-        assert device._current_track_info["title"] == "Smooth Criminal"
-        assert (
-            device._current_track_info["albumArtURI"] == "https://example.com/next.jpg"
-        )
+        media = device.current_media
+        assert media is not None
+        assert media.title == "Smooth Criminal"
+        assert media.image_url == "https://example.com/next.jpg"
+        assert media.uri == "https://example.com/next.mp3"
+        assert media.duration == 292
 
     @pytest.mark.parametrize(
         ("payload", "expected_art"),
