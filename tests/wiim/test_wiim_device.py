@@ -1,4 +1,5 @@
 # test_wiim_device.py
+import logging
 from dataclasses import asdict
 
 import pytest
@@ -14,6 +15,48 @@ from wiim.consts import (
     InputMode,
 )
 from wiim.models import WiimGroupRole, WiimGroupSnapshot, WiimRepeatMode
+
+# DIDL-Lite as delivered by both LastChange events and the GetInfoEx action.
+_DIDL_LITE_TRACK = (
+    '<?xml version="1.0"?>'
+    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"'
+    ' xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+    "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+    '<item id="0">'
+    '<res protocolInfo="http-get:*:audio/mpeg:*" duration="00:05:19.000">'
+    "Amazon Music</res>"
+    "<dc:title>Man in the Mirror</dc:title>"
+    "<dc:creator>Michael Jackson</dc:creator>"
+    "<upnp:artist>Michael Jackson</upnp:artist>"
+    "<upnp:album>&apos;80s Pop</upnp:album>"
+    "<upnp:albumArtURI>https://example.com/art.jpg</upnp:albumArtURI>"
+    "</item>"
+    "</DIDL-Lite>"
+)
+
+# The track that follows _DIDL_LITE_TRACK, for tests that need a second,
+# unambiguously later track.
+_DIDL_LITE_NEXT_TRACK = (
+    '<?xml version="1.0"?>'
+    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"'
+    ' xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+    "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
+    '<item id="0">'
+    "<dc:title>Smooth Criminal</dc:title>"
+    "<dc:creator>Michael Jackson</dc:creator>"
+    "<upnp:artist>Michael Jackson</upnp:artist>"
+    "<upnp:album>Bad</upnp:album>"
+    "<upnp:albumArtURI>https://example.com/next.jpg</upnp:albumArtURI>"
+    "</item>"
+    "</DIDL-Lite>"
+)
+
+
+def _logged_missing_item(caplog) -> bool:
+    """Return True if the parser reported a missing DIDL item."""
+    return any("No 'item' element" in r.getMessage() for r in caplog.records)
 
 
 def _build_upnp_device(
@@ -269,6 +312,218 @@ class TestWiimDevice:
         assert capabilities.can_repeat is True
         assert capabilities.can_shuffle is True
         assert capabilities.track_source == "Pandora2"
+
+    def test_event_metadata_populates_track_info(self, mock_upnp_device, mock_session):
+        """Test AVTransport event metadata still populates track info."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+
+        device._update_state_from_av_transport_event_data(
+            {"CurrentTrackMetaData": _DIDL_LITE_TRACK}
+        )
+
+        assert device._current_track_info["title"] == "Man in the Mirror"
+        assert device._current_track_info["artist"] == "Michael Jackson"
+        assert device._current_track_info["album"] == "'80s Pop"
+        assert (
+            device._current_track_info["albumArtURI"] == "https://example.com/art.jpg"
+        )
+
+    @pytest.mark.asyncio
+    async def test_polled_media_info_populates_track_info(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test GetInfoEx TrackMetaData populates track info without eventing."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device.async_set_AVT_cmd = AsyncMock(
+            return_value={
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+                "TrackMetaData": _DIDL_LITE_TRACK,
+            }
+        )
+
+        await device.async_get_transport_capabilities()
+
+        media = device.current_media
+        assert media is not None
+        assert media.title == "Man in the Mirror"
+        assert media.artist == "Michael Jackson"
+        assert media.image_url == "https://example.com/art.jpg"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "track_metadata",
+        [
+            None,
+            "",
+            (
+                '<?xml version="1.0"?><DIDL-Lite '
+                'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"></DIDL-Lite>'
+            ),
+            "not xml and not json",
+        ],
+        ids=["absent", "empty", "no-item", "unparseable"],
+    )
+    async def test_polled_media_info_never_clobbers_event_metadata(
+        self, mock_upnp_device, mock_session, track_metadata
+    ):
+        """Test an empty polled payload cannot erase event-sourced metadata."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device._update_state_from_av_transport_event_data(
+            {"CurrentTrackMetaData": _DIDL_LITE_TRACK}
+        )
+        before = dict(device._current_track_info)
+
+        device.async_set_AVT_cmd = AsyncMock(
+            return_value={
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+                "TrackMetaData": track_metadata,
+            }
+        )
+        await device.async_get_transport_capabilities()
+
+        assert device._current_track_info == before
+
+    @pytest.mark.asyncio
+    async def test_polled_media_info_yields_to_event_arriving_mid_request(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test an event during the request wins over the older polled reply."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device._update_state_from_av_transport_event_data(
+            {"CurrentTrackMetaData": _DIDL_LITE_TRACK}
+        )
+
+        async def _reply_after_track_change(*args, **kwargs):
+            # The event handler is synchronous, so it lands while this request
+            # is outstanding; the reply still describes the earlier track.
+            device._update_state_from_av_transport_event_data(
+                {"CurrentTrackMetaData": _DIDL_LITE_NEXT_TRACK}
+            )
+            return {
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+                "TrackMetaData": _DIDL_LITE_TRACK,
+            }
+
+        device.async_set_AVT_cmd = AsyncMock(side_effect=_reply_after_track_change)
+        await device.async_get_transport_capabilities()
+
+        assert device._current_track_info["title"] == "Smooth Criminal"
+        assert (
+            device._current_track_info["albumArtURI"] == "https://example.com/next.jpg"
+        )
+
+    @pytest.mark.asyncio
+    async def test_polled_media_info_applies_when_no_event_intervenes(
+        self, mock_upnp_device, mock_session
+    ):
+        """Test the identity guard still lets an uncontested poll through."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device._http_api = AsyncMock(spec=WiimApiEndpoint)
+        device._update_state_from_av_transport_event_data(
+            {"CurrentTrackMetaData": _DIDL_LITE_TRACK}
+        )
+
+        # The track advanced with no event to report it, so the polled reply is
+        # the newer of the two.
+        device.async_set_AVT_cmd = AsyncMock(
+            return_value={
+                "PlayMedium": "SONGLIST-NETWORK",
+                "TrackSource": "Pandora2",
+                "TrackMetaData": _DIDL_LITE_NEXT_TRACK,
+                "TrackURI": "https://example.com/next.mp3",
+                "TrackDuration": "00:04:52",
+            }
+        )
+        await device.async_get_transport_capabilities()
+
+        media = device.current_media
+        assert media is not None
+        assert media.title == "Smooth Criminal"
+        assert media.image_url == "https://example.com/next.jpg"
+        assert media.uri == "https://example.com/next.mp3"
+        assert media.duration == 292
+
+    @pytest.mark.parametrize(
+        ("payload", "expected_art"),
+        [
+            pytest.param(
+                (
+                    '<?xml version="1.0"?>'
+                    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"'
+                    ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"'
+                    ' xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+                    '<item id="0">'
+                    "<dc:title>Song</dc:title>"
+                    "<upnp:albumArtURI>https://example.com/art.jpg?a=1&amp;b=2"
+                    "</upnp:albumArtURI>"
+                    "</item></DIDL-Lite>"
+                ),
+                "https://example.com/art.jpg?a=1&b=2",
+                id="decoded-with-ampersand",
+            ),
+            pytest.param(
+                (
+                    "&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot;"
+                    " xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot;"
+                    " xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;"
+                    "&lt;item id=&quot;0&quot;&gt;"
+                    "&lt;dc:title&gt;Song&lt;/dc:title&gt;"
+                    "&lt;upnp:albumArtURI&gt;https://example.com/art.jpg"
+                    "&lt;/upnp:albumArtURI&gt;"
+                    "&lt;/item&gt;&lt;/DIDL-Lite&gt;"
+                ),
+                "https://example.com/art.jpg",
+                id="escaped-event-payload",
+            ),
+        ],
+    )
+    def test_parse_track_metadata_escaping_variants(
+        self, mock_upnp_device, mock_session, payload, expected_art
+    ):
+        """Test decoded payloads keep entities intact and escaped ones parse."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+
+        parsed = device._parse_track_metadata(payload, "TrackMetaData")
+
+        assert parsed["title"] == "Song"
+        assert parsed["albumArtURI"] == expected_art
+
+    def test_parse_track_metadata_reads_item_without_child_elements(
+        self, mock_upnp_device, mock_session, caplog
+    ):
+        """Test a DIDL item carrying only attributes is not read as missing."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        header = (
+            '<?xml version="1.0"?>'
+            '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+        )
+
+        with caplog.at_level(logging.WARNING, logger="wiim.sdk"):
+            present = device._parse_track_metadata(
+                f'{header}<item id="0"/></DIDL-Lite>', "CurrentTrackMetaData"
+            )
+            warned_on_present = _logged_missing_item(caplog)
+            caplog.clear()
+            absent = device._parse_track_metadata(
+                f"{header}</DIDL-Lite>", "CurrentTrackMetaData"
+            )
+            warned_on_absent = _logged_missing_item(caplog)
+
+        # An item that is present but carries no children reads as empty fields;
+        # only a genuinely absent item leaves them unset.
+        assert present["title"] == ""
+        assert present["uri"] == ""
+        assert absent["title"] is None
+        assert absent["uri"] is None
+        assert present != absent
+        assert not warned_on_present
+        assert warned_on_absent
 
     @pytest.mark.asyncio
     async def test_async_get_presets(self, mock_upnp_device, mock_session):
