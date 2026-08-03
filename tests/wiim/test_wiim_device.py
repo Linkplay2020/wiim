@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
+from wiim.exceptions import WiimDeviceException
 from wiim.wiim_device import WiimDevice
 from wiim.endpoint import WiimApiEndpoint
 from wiim.consts import (
@@ -600,6 +601,23 @@ class TestWiimDevice:
         assert len(snapshot.items) == 2
         assert snapshot.items[0].queue_index == 1
         assert snapshot.items[0].title == "Track One"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name", ["async_get_presets", "async_get_queue_snapshot"]
+    )
+    async def test_browse_methods_propagate_device_errors(
+        self, mock_upnp_device, mock_session, method_name
+    ):
+        """Test browse methods propagate device communication errors."""
+        device = WiimDevice(mock_upnp_device, mock_session)
+        device.play_queue_service = MagicMock()
+        device._invoke_upnp_action = AsyncMock(
+            side_effect=WiimDeviceException("request failed")
+        )
+
+        with pytest.raises(WiimDeviceException, match="request failed"):
+            await getattr(device, method_name)()
 
     @pytest.mark.asyncio
     async def test_follower_reads_grouped_state_from_leader(self, mock_session):

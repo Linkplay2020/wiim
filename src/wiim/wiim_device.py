@@ -1696,11 +1696,8 @@ class WiimDevice:
                 "Device %s: PlayQueue service not available.", self.name
             )
             return []
-        try:
-            result = await self._invoke_upnp_action("PlayQueue", "GetKeyMapping")
-            return self._parse_preset_data(result.get("QueueContext", ""))
-        except WiimDeviceException:
-            return []
+        result = await self._invoke_upnp_action("PlayQueue", "GetKeyMapping")
+        return self._parse_preset_data(result.get("QueueContext", ""))
 
     async def async_get_presets(self) -> tuple[WiimPreset, ...]:
         """Return normalized presets for browsing."""
@@ -1768,13 +1765,10 @@ class WiimDevice:
                 "Device %s: PlayQueue service not available.", self.name
             )
             return []
-        try:
-            result = await self._invoke_upnp_action(
-                "PlayQueue", "BrowseQueue", QueueName="CurrentQueue"
-            )
-            return self._parse_queue_data(result.get("QueueContext", ""))
-        except WiimDeviceException:
-            return []
+        result = await self._invoke_upnp_action(
+            "PlayQueue", "BrowseQueue", QueueName="CurrentQueue"
+        )
+        return self._parse_queue_data(result.get("QueueContext", ""))
 
     async def async_get_queue_snapshot(self) -> WiimQueueSnapshot:
         """Return normalized queue information for browsing."""
