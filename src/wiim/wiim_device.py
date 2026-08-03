@@ -1163,6 +1163,18 @@ class WiimDevice:
         if not self._track_metadata_is_populated(track_info):
             return
 
+        track_uri = media_info.get("TrackURI")
+        if not track_info.get("uri") and isinstance(track_uri, str) and track_uri:
+            track_info["uri"] = track_uri
+
+        track_duration = media_info.get("TrackDuration")
+        if (
+            not track_info.get("duration")
+            and isinstance(track_duration, str)
+            and track_duration
+        ):
+            track_info["duration"] = self.parse_duration(track_duration)
+
         if track_info != self._current_track_info:
             SDK_LOGGER.debug(
                 "Device %s: Track metadata refreshed from polled GetInfoEx.",
