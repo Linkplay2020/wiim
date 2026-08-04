@@ -301,7 +301,7 @@ class WiimDevice:
                 if self._notify_server:
                     try:
                         await self._notify_server.async_stop_server()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         self.logger.warning(
                             "Failed to stop previous notify server: %s", e
                         )
@@ -970,10 +970,7 @@ class WiimDevice:
                 self._playing_status.value
             )
 
-        if "CurrentTrackURI" in event_data:
-            self._current_track_uri = event_data["CurrentTrackURI"]
-        else:
-            self._current_track_uri = None
+        self._current_track_uri = event_data.get("CurrentTrackURI")
 
         if "CurrentTrackDuration" in event_data:
             duration = self.parse_duration(event_data["CurrentTrackDuration"])
@@ -1029,7 +1026,7 @@ class WiimDevice:
                 raw_meta = meta.strip()
                 if raw_meta[:1] not in ("<", "{", "["):
                     raw_meta = unescape(raw_meta).strip()
-                if raw_meta.startswith("{") or raw_meta.startswith("["):
+                if raw_meta.startswith(("{", "[")):
                     SDK_LOGGER.debug(
                         "Device: %s is raw JSON. Attempting to parse.",
                         source_key,

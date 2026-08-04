@@ -164,5 +164,5 @@ if __name__ == "__main__":
         asyncio.run(main_cli())
     except KeyboardInterrupt:
         SDK_LOGGER.info("Discovery process interrupted by user.")
-    except Exception as e:
-        SDK_LOGGER.error(f"An error occurred: {e}", exc_info=True)
+    except Exception:  # noqa: BLE001
+        SDK_LOGGER.exception("An error occurred")

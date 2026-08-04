@@ -65,7 +65,7 @@ def parse_last_change_event(xml_text: str, logger: logging.Logger) -> Dict[str, 
                     if value is None:
                         continue
                     raw_value = value.strip()
-                    if raw_value.startswith("{") or raw_value.startswith("["):
+                    if raw_value.startswith(("{", "[")):
                         changed_variables[variable_name] = json.loads(raw_value)
                         continue
 
