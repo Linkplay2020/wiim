@@ -539,8 +539,9 @@ class WiimDevice:
         success_all = True
         try:
             if self.av_transport:
-                await self._event_handler.async_resubscribe(self.av_transport)
-                self._schedule_subscription_renewal(UPNP_TIMEOUT_TIME)
+                await self._renew_service_subscription(
+                    self._event_handler, self.av_transport
+                )
         except UpnpError as err_av:
             self.logger.warning(
                 "Device %s: Failed to renew AVTransport subscription: %s",
@@ -551,8 +552,9 @@ class WiimDevice:
 
         try:
             if self.rendering_control:
-                await self._event_handler.async_resubscribe(self.rendering_control)
-                self._schedule_subscription_renewal(UPNP_TIMEOUT_TIME)
+                await self._renew_service_subscription(
+                    self._event_handler, self.rendering_control
+                )
         except UpnpError as err_rc:
             self.logger.warning(
                 "Device %s: Failed to renew RenderingControl subscription: %s",
@@ -563,8 +565,9 @@ class WiimDevice:
 
         try:
             if self.play_queue_service:
-                await self._event_handler.async_resubscribe(self.play_queue_service)
-                self._schedule_subscription_renewal(UPNP_TIMEOUT_TIME)
+                await self._renew_service_subscription(
+                    self._event_handler, self.play_queue_service
+                )
         except UpnpError as err_pq:
             self.logger.warning(
                 "Device %s: Failed to renew PlayQueue subscription: %s",
@@ -574,6 +577,7 @@ class WiimDevice:
             success_all = False
 
         if success_all:
+            self._schedule_subscription_renewal(UPNP_TIMEOUT_TIME)
             self.logger.info(
                 "Device %s: Successfully renewed UPnP subscriptions.", self.name
             )
@@ -607,6 +611,21 @@ class WiimDevice:
             self._available = False
             self._event_handler_started = False
             return False
+
+    async def _renew_service_subscription(
+        self, event_handler: UpnpEventHandler, service: UpnpService
+    ) -> None:
+        """Renew one service subscription, subscribing afresh if its SID was dropped."""
+        # resubscribing a service the handler holds no SID for raises a plain KeyError;
+        # the device dropped the subscription, so only a full subscribe brings it back.
+        if event_handler.sid_for_service(service) is None:
+            await event_handler.async_subscribe(
+                service, timeout=timedelta(seconds=UPNP_TIMEOUT_TIME)
+            )
+            return
+        await event_handler.async_resubscribe(
+            service, timeout=timedelta(seconds=UPNP_TIMEOUT_TIME)
+        )
 
     def _schedule_subscription_renewal(self, timeout: int) -> None:
         """Schedule the next subscription renewal."""

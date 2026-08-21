@@ -3,8 +3,12 @@ import logging
 from dataclasses import asdict
 
 import pytest
+from datetime import timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 from wiim.exceptions import WiimDeviceException
+from async_upnp_client.client import UpnpService
+from async_upnp_client.event_handler import UpnpEventHandler
+from async_upnp_client.exceptions import UpnpConnectionError
 from wiim.wiim_device import WiimDevice
 from wiim.endpoint import WiimApiEndpoint
 from wiim.consts import (
@@ -12,6 +16,7 @@ from wiim.consts import (
     LoopMode,
     PlayerAttribute,
     PlayingStatus,
+    UPNP_TIMEOUT_TIME,
     WiimHttpCommand,
     InputMode,
 )
@@ -787,3 +792,98 @@ class TestWiimDevice:
         )
         leader.async_set_volume.assert_not_awaited()
         leader.async_set_mute.assert_not_awaited()
+
+
+def _device_with_subscribed_services(*subscribed: str) -> WiimDevice:
+    """
+    Build a device whose real event handler holds SIDs for the named services only.
+
+    The event handler is the real one, so its SID bookkeeping (and the plain KeyError
+    it raises for a service it does not know) is exercised, with only its HTTP stubbed.
+    """
+    upnp_device = MagicMock()
+    upnp_device.friendly_name = "WiiM Woonkamer"
+    upnp_device.udn = "uuid:test-wiim-renewal"
+    upnp_device.device_url = "http://192.168.1.139:49152/description.xml"
+    device = WiimDevice(upnp_device=upnp_device, session=MagicMock())
+    device.av_transport = MagicMock(spec=UpnpService, name="AVTransport")
+    device.rendering_control = MagicMock(spec=UpnpService, name="RenderingControl")
+    device.play_queue_service = MagicMock(spec=UpnpService, name="PlayQueue")
+
+    notify_server = MagicMock()
+    notify_server.callback_url = "http://192.168.1.10:8000/notify"
+    handler = UpnpEventHandler(notify_server, MagicMock())
+    handler._subscriptions = {
+        f"uuid:sid-{name}": getattr(device, name) for name in subscribed
+    }
+    handler.async_subscribe = AsyncMock()
+    handler._async_do_resubscribe = AsyncMock(
+        return_value=("uuid:sid", timedelta(seconds=UPNP_TIMEOUT_TIME))
+    )
+    device._event_handler = handler
+    device._event_handler_started = True
+    device._notify_server = MagicMock()
+    device._notify_server.async_stop_server = AsyncMock()
+    device._available = True
+    return device
+
+
+class TestSubscriptionRenewal:
+    """A renewal must survive a dropped SID and always leave the next one armed."""
+
+    @pytest.mark.asyncio
+    async def test_dropped_sid_subscribes_afresh(self):
+        """A service whose SID was dropped must be subscribed, not resubscribed."""
+        device = _device_with_subscribed_services(
+            "rendering_control", "play_queue_service"
+        )
+
+        assert await device._renew_subscriptions() is True
+
+        device._event_handler.async_subscribe.assert_awaited_once_with(
+            device.av_transport, timeout=timedelta(seconds=UPNP_TIMEOUT_TIME)
+        )
+        assert device._event_handler._async_do_resubscribe.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_dropped_sid_keeps_renewal_armed(self):
+        """
+        Losing every SID must not kill the renewal timer.
+
+        A KeyError escaping the renewal left the timer unarmed, so the device
+        silently stopped reporting state until something else reinitialised it.
+        """
+        device = _device_with_subscribed_services()
+        device._schedule_subscription_renewal = MagicMock()
+
+        assert await device._renew_subscriptions() is True
+
+        device._schedule_subscription_renewal.assert_called_once_with(UPNP_TIMEOUT_TIME)
+        assert device._available is True
+        assert device._event_handler_started is True
+
+    @pytest.mark.asyncio
+    async def test_renewal_armed_once_per_run(self):
+        """A fully successful renewal arms one timer, not one per service."""
+        device = _device_with_subscribed_services(
+            "av_transport", "rendering_control", "play_queue_service"
+        )
+        device._schedule_subscription_renewal = MagicMock()
+
+        assert await device._renew_subscriptions() is True
+
+        device._schedule_subscription_renewal.assert_called_once_with(UPNP_TIMEOUT_TIME)
+
+    @pytest.mark.asyncio
+    async def test_unreachable_device_still_fails(self):
+        """An offline device must still fail the renewal and tear the handler down."""
+        device = _device_with_subscribed_services(
+            "av_transport", "rendering_control", "play_queue_service"
+        )
+        device._event_handler._async_do_resubscribe = AsyncMock(
+            side_effect=UpnpConnectionError("device offline")
+        )
+
+        assert await device._renew_subscriptions() is False
+        assert device._available is False
+        assert device._event_handler_started is False
