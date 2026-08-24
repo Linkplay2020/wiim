@@ -1,17 +1,14 @@
 from __future__ import annotations
+
 from typing import (
     TYPE_CHECKING,
-    List,
-    Dict,
 )
 
-from .consts import SDK_LOGGER
-from .wiim_device import WiimDevice, GeneralEventCallback
-from .exceptions import WiimException
-from .consts import WiimHttpCommand, MultiroomAttribute
+from .consts import SDK_LOGGER, MultiroomAttribute, WiimHttpCommand
 from .discovery import async_discover_wiim_devices_upnp
-from .exceptions import WiimRequestException
+from .exceptions import WiimException, WiimRequestException
 from .models import WiimGroupRole, WiimGroupSnapshot
+from .wiim_device import GeneralEventCallback, WiimDevice
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -24,8 +21,8 @@ class WiimController:
         self, session: ClientSession, event_callback: GeneralEventCallback | None = None
     ):
         self.session = session
-        self._devices: Dict[str, WiimDevice] = {}
-        self._multiroom_groups: Dict[str, List[str]] = {}
+        self._devices: dict[str, WiimDevice] = {}
+        self._multiroom_groups: dict[str, list[str]] = {}
         self._event_callback = event_callback
         self.logger = SDK_LOGGER
 
@@ -37,11 +34,11 @@ class WiimController:
             raise ValueError(f"Device {udn} is not managed by the controller") from err
 
     @property
-    def devices(self) -> List[WiimDevice]:
+    def devices(self) -> list[WiimDevice]:
         """Return a list of all managed WiiM devices."""
         return list(self._devices.values())
 
-    def _managed_group_snapshots(self) -> Dict[str, WiimGroupSnapshot]:
+    def _managed_group_snapshots(self) -> dict[str, WiimGroupSnapshot]:
         """Return current group snapshots for all managed devices."""
         return {
             device_udn: self.get_group_snapshot(device_udn)
@@ -49,7 +46,7 @@ class WiimController:
         }
 
     def _notify_group_snapshot_changes(
-        self, previous_snapshots: Dict[str, WiimGroupSnapshot]
+        self, previous_snapshots: dict[str, WiimGroupSnapshot]
     ) -> None:
         """Notify devices whose group snapshot changed."""
         for device_udn, device in self._devices.items():
@@ -159,7 +156,7 @@ class WiimController:
 
             # {"num":X, "slaves":[{"name":"...", "ip":"...", "uuid":"..."}]}
             num_followers = int(response.get(MultiroomAttribute.NUM_FOLLOWERS, 0))
-            follower_udns: List[str] = []
+            follower_udns: list[str] = []
 
             if num_followers > 0:
                 slaves_list = response.get(MultiroomAttribute.FOLLOWER_LIST, [])
@@ -287,7 +284,7 @@ class WiimController:
         )
         self._notify_group_snapshot_changes(previous_snapshots)
 
-    def get_device_group_info(self, device_udn: str) -> Dict[str, str]:
+    def get_device_group_info(self, device_udn: str) -> dict[str, str]:
         """
         Get the group role (leader/follower/standalone) and leader UDN for a given device.
         Returns: {"role": "leader"|"follower"|"standalone", "leader_udn": leader's UDN}
@@ -330,7 +327,7 @@ class WiimController:
         """Return the device UDN that should receive direct commands."""
         return self.get_group_snapshot(device_udn).command_target_udn
 
-    def get_group_members(self, device_udn: str) -> List[WiimDevice]:
+    def get_group_members(self, device_udn: str) -> list[WiimDevice]:
         """
         Get all members of the group the given device belongs to (including itself).
         Returns a list of WiimDevice objects.
@@ -353,8 +350,7 @@ class WiimController:
             )
 
         def format_udn_for_command(udn: str) -> str:
-            if udn.startswith("uuid:"):
-                udn = udn[5:]
+            udn = udn.removeprefix("uuid:")
             udn = udn.replace("-", "")
             # Assuming the last 8 chars might be a specific suffix to remove if it's added by the device
             # This is a heuristic; verify with WiiM API docs if needed.

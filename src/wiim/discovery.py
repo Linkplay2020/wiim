@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from aiohttp import ClientSession, TCPConnector
@@ -202,7 +202,7 @@ async def async_discover_wiim_devices_upnp(
     session: ClientSession,
     timeout: int = DISCOVERY_TIMEOUT,
     target_device_type: str = UPNP_DEVICE_TYPE,
-) -> List[WiimDevice]:
+) -> list[WiimDevice]:
     """Discover WiiM devices on the network using UPnP."""
     logger = SDK_LOGGER
     discovered_devices: dict[str, WiimDevice] = {}
@@ -244,9 +244,9 @@ async def async_discover_wiim_devices_upnp(
 
 async def async_discover_wiim_devices_zeroconf(
     session: ClientSession,
-    zeroconf_instance: "Zeroconf",
+    zeroconf_instance: Zeroconf,
     service_type: str = "_linkplay._tcp.local.",
-) -> List[WiimDevice]:
+) -> list[WiimDevice]:
     """Discover WiiM devices using Zeroconf and then verify them via UPnP."""
     del session
     del zeroconf_instance

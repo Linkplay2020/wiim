@@ -2,50 +2,50 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, cast
-from collections.abc import Sequence
-from urllib.parse import urlparse, urljoin
-from datetime import timedelta
-import xml.etree.ElementTree as ET
-from ipaddress import IPv4Address, IPv6Address, ip_address
-from html import unescape
-from contextlib import suppress
-import time
 import json
+import time
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Sequence
+from contextlib import suppress
+from datetime import timedelta
+from html import unescape
+from ipaddress import IPv4Address, IPv6Address, ip_address
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urljoin, urlparse
 
-from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
-from async_upnp_client.exceptions import UpnpError, UpnpServerOSError
-from async_upnp_client.event_handler import UpnpEventHandler
 from async_upnp_client.aiohttp import AiohttpNotifyServer
+from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
+from async_upnp_client.event_handler import UpnpEventHandler
+from async_upnp_client.exceptions import UpnpError, UpnpServerOSError
 
 from .consts import (
+    _PLAYER_TO_PLAYING,
+    AUDIO_AUX_MODE_IDS,
     CMD_TO_MODE_MAP,
-    SDK_LOGGER,
     MANUFACTURER_WIIM,
     PLAY_MEDIUMS_CTRL,
+    PLAYING_TO_INPUT_MAP,
+    SDK_LOGGER,
     SUPPORTED_INPUT_MODES_BY_MODEL,
     SUPPORTED_OUTPUT_MODES_BY_MODEL,
     TRACK_SOURCES_CTRL,
     UPNP_AV_TRANSPORT_SERVICE_ID,
     UPNP_RENDERING_CONTROL_SERVICE_ID,
+    UPNP_TIMEOUT_TIME,
     UPNP_WIIM_PLAY_QUEUE_SERVICE_ID,
-    DeviceAttribute,
-    PlayMediumToInputMode,
-    PlayerAttribute,
-    PlayingStatus,
-    PlayerStatus,
-    _PLAYER_TO_PLAYING,
-    PlayingMode,
-    PLAYING_TO_INPUT_MAP,
-    InputMode,
+    VALID_PLAY_MEDIUMS,
     AudioOutputHwMode,
+    DeviceAttribute,
     EqualizerMode,
+    InputMode,
     LoopMode,
     MuteMode,
+    PlayerAttribute,
+    PlayerStatus,
+    PlayingMode,
+    PlayingStatus,
+    PlayMediumToInputMode,
     WiimHttpCommand,
-    UPNP_TIMEOUT_TIME,
-    AUDIO_AUX_MODE_IDS,
-    VALID_PLAY_MEDIUMS,
     wiimDeviceType,
 )
 from .endpoint import WiimApiEndpoint
@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 DEFAULT_AVAILABILITY_POLLING_INTERVAL = 60
 
 GeneralEventCallback = Callable[["WiimDevice"], None]
-UpnpServiceEventCallback = Callable[[UpnpService, List[UpnpStateVariable]], None]
+UpnpServiceEventCallback = Callable[[UpnpService, list[UpnpStateVariable]], None]
 
 
 class WiimDevice:
@@ -971,7 +971,7 @@ class WiimDevice:
             )
             raise
 
-    def _update_state_from_av_transport_event_data(self, event_data: Dict[str, Any]):
+    def _update_state_from_av_transport_event_data(self, event_data: dict[str, Any]):
         """(Primarily for HTTP cache) Update device state based on parsed AVTransport event data."""
         # This method is now mostly for populating _player_properties from LastChange,
         if "TransportState" in event_data:
@@ -1147,16 +1147,12 @@ class WiimDevice:
             "album": meta.get("album"),
             "uri": meta.get("res"),
             "duration": (
-                self.parse_duration(meta.get("duration"))  # noqa: SLF001
+                self.parse_duration(meta.get("duration"))
                 if meta.get("duration")
                 else None
             ),
-            "albumArtURI": self.make_absolute_url(  # noqa: SLF001
-                meta.get("albumArtURI")
-            ),
-            "album_art_uri": self.make_absolute_url(  # noqa: SLF001
-                meta.get("albumArtURI")
-            ),
+            "albumArtURI": self.make_absolute_url(meta.get("albumArtURI")),
+            "album_art_uri": self.make_absolute_url(meta.get("albumArtURI")),
         }
 
     @staticmethod
@@ -1257,12 +1253,12 @@ class WiimDevice:
         try:
             device_data = await self._http_request(WiimHttpCommand.DEVICE_STATUS)
             self._device_info_properties.update(
-                cast(Dict[DeviceAttribute, str], device_data)
+                cast(dict[DeviceAttribute, str], device_data)
             )
 
             player_data = await self._http_request(WiimHttpCommand.PLAYER_STATUS)
             self._player_properties.update(
-                cast(Dict[PlayerAttribute, str], player_data)
+                cast(dict[PlayerAttribute, str], player_data)
             )
 
             if PlayerAttribute.VOLUME in self._player_properties:

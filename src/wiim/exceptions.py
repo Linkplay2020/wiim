@@ -2,13 +2,9 @@
 class WiimException(Exception):
     """Base exception for WiiM SDK."""
 
-    pass
-
 
 class WiimRequestException(WiimException):
     """Raised when an HTTP request to the WiiM device fails."""
-
-    pass
 
 
 class WiimInvalidDataException(WiimException):
@@ -21,5 +17,3 @@ class WiimInvalidDataException(WiimException):
 
 class WiimDeviceException(WiimException):
     """Raised for errors specific to WiimDevice operations (e.g., UPnP failure)."""
-
-    pass

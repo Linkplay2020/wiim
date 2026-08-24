@@ -1,8 +1,8 @@
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any
 
-from aiohttp import ClientSession, ClientTimeout, ClientError
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .consts import (
     API_ENDPOINT,
@@ -10,7 +10,7 @@ from .consts import (
     SDK_LOGGER,
     WiimHttpCommand,
 )
-from .exceptions import WiimRequestException, WiimInvalidDataException
+from .exceptions import WiimInvalidDataException, WiimRequestException
 
 
 class WiimBaseEndpoint(ABC):
@@ -23,7 +23,7 @@ class WiimBaseEndpoint(ABC):
         """Performs a request on the given command and verifies the result (e.g., expects 'OK')."""
 
     @abstractmethod
-    async def json_request(self, command: str) -> Dict[str, Any]:
+    async def json_request(self, command: str) -> dict[str, Any]:
         """Performs a request on the given command and returns the result as a JSON object."""
 
     @abstractmethod
@@ -102,7 +102,7 @@ class WiimApiEndpoint(WiimBaseEndpoint):
             self.logger.warning(f"Timeout for {url}")
             raise WiimRequestException(f"Timeout for {url}") from asyncio.TimeoutError
 
-    async def json_request(self, command: str) -> Dict[str, Any]:
+    async def json_request(self, command: str) -> dict[str, Any]:
         """
         Performs a GET request on the given command and returns the result as a JSON object.
         """
@@ -134,7 +134,7 @@ class WiimApiEndpoint(WiimBaseEndpoint):
                         ) and response_text.strip().endswith("}"):
                             return await response.json(content_type=None)
 
-                        data: Dict[str, Any] = {}
+                        data: dict[str, Any] = {}
                         for line in response_text.strip().split("\n"):
                             if "=" in line:
                                 key, value = line.split("=", 1)

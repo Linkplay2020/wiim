@@ -1,7 +1,6 @@
 # wiim/__main__.py
 import asyncio
 import logging
-from typing import Dict
 
 from aiohttp import ClientSession
 from zeroconf import ServiceInfo
@@ -19,7 +18,7 @@ class ZeroconfListener:
     """
 
     def __init__(self) -> None:
-        self.discovered_devices: Dict[str, ServiceInfo] = {}
+        self.discovered_devices: dict[str, ServiceInfo] = {}
 
     def remove_service(self, zeroconf: "Zeroconf", type: str, name: str) -> None:
         """Called when a service is removed."""

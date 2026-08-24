@@ -2,7 +2,6 @@
 
 from typing import Final
 
-
 MANUFACTURER_WIIM: Final[str] = "Linkplay"
 MODELS_WIIM_AMP: Final[str] = "WiiM Amp"
 MODELS_WIIM_MINI: Final[str] = "WiiM Mini"

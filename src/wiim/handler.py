@@ -1,10 +1,10 @@
-import xml.etree.ElementTree as ET
 import json
-from typing import Any, Dict
 import logging
+import xml.etree.ElementTree as ET
+from typing import Any
 
 
-def parse_last_change_event(xml_text: str, logger: logging.Logger) -> Dict[str, Any]:
+def parse_last_change_event(xml_text: str, logger: logging.Logger) -> dict[str, Any]:
     """
     Parses the LastChange event XML from UPnP services.
     AVTransport and RenderingControl typically use this.
@@ -22,7 +22,7 @@ def parse_last_change_event(xml_text: str, logger: logging.Logger) -> Dict[str, 
                          </InstanceID>
                        </Event>
     """
-    changed_variables: Dict[str, Any] = {}
+    changed_variables: dict[str, Any] = {}
     try:
         # Remove default namespace for easier parsing if present
         xml_text = xml_text.replace(
@@ -74,7 +74,7 @@ def parse_last_change_event(xml_text: str, logger: logging.Logger) -> Dict[str, 
                         ".//{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}item"
                     )
                     if item_node is not None:
-                        meta: Dict[str, Any] = {}
+                        meta: dict[str, Any] = {}
                         title_node = item_node.find(
                             "{http://purl.org/dc/elements/1.1/}title"
                         )
