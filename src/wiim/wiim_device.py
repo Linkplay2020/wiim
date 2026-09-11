@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 from async_upnp_client.aiohttp import AiohttpNotifyServer
 from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
 from async_upnp_client.event_handler import UpnpEventHandler
-from async_upnp_client.exceptions import UpnpError, UpnpServerOSError
+from async_upnp_client.exceptions import UpnpError
 
 from .consts import (
     _PLAYER_TO_PLAYING,
@@ -281,15 +281,9 @@ class WiimDevice:
                 local_ip = self.local_host
                 device_ip = self.ip_address
                 device_address = self._parse_ip_address(device_ip)
-                if device_address is not None:
-                    last_octet = device_address.packed[-1]
-                else:
-                    last_octet = 0
-                base_port = 50000
-                assigned_port = base_port + last_octet
                 is_ipv6 = device_address is not None and device_address.version == 6
                 source_ip = local_ip or ("::" if is_ipv6 else "0.0.0.0")
-                source = (source_ip, assigned_port)
+                source = (source_ip, 0)
 
                 if self.av_transport:
                     self.av_transport = None
@@ -371,22 +365,7 @@ class WiimDevice:
             if self._notify_server and self._notify_server.event_handler:
                 if not self._event_handler_started:
                     try:
-                        for attempt in range(256):
-                            try:
-                                await self._notify_server.async_start_server()
-                                break
-                            except UpnpServerOSError:
-                                # try the next port if this one is in use
-                                self._notify_server = AiohttpNotifyServer(
-                                    requester=self.upnp_device.requester,
-                                    source=(source_ip, assigned_port + attempt + 1),
-                                    loop=loop,
-                                )
-                        else:
-                            raise UpnpServerOSError(
-                                f"Device {self.name}: no free port in "
-                                f"{assigned_port}..{assigned_port + 255}"
-                            )
+                        await self._notify_server.async_start_server()
                         self._event_handler = self._notify_server.event_handler
                         if self._event_handler is None:
                             raise WiimDeviceException(

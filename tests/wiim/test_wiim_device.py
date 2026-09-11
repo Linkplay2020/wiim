@@ -216,11 +216,17 @@ class TestWiimDevice:
         device._http_command_ok.assert_called_with(WiimHttpCommand.SET_VOLUME, "75")
 
     @pytest.mark.parametrize(
-        ("device_ip", "expected_port", "expected_source_ip"),
+        ("device_ip", "local_host", "expected_source_ip"),
         [
-            pytest.param("192.168.1.100", 50100, "0.0.0.0", id="ipv4"),
-            pytest.param("2001:db8::5", 50005, "::", id="ipv6"),
-            pytest.param("wiim.local", 50000, "0.0.0.0", id="hostname"),
+            pytest.param("192.168.1.100", None, "0.0.0.0", id="ipv4"),
+            pytest.param("2001:db8::5", None, "::", id="ipv6"),
+            pytest.param("wiim.local", None, "0.0.0.0", id="hostname"),
+            pytest.param(
+                "192.168.1.106",
+                "192.168.1.71",
+                "192.168.1.71",
+                id="configured-local-host",
+            ),
         ],
     )
     @pytest.mark.asyncio
@@ -228,14 +234,14 @@ class TestWiimDevice:
         self,
         mock_session,
         device_ip,
-        expected_port,
+        local_host,
         expected_source_ip,
     ):
         """Test the notify server binds an address family the device can reach."""
         upnp_device = _build_upnp_device(
             udn="uuid:test", name="WiiM", ip_address=device_ip
         )
-        device = WiimDevice(upnp_device, mock_session)
+        device = WiimDevice(upnp_device, mock_session, local_host=local_host)
 
         with patch("wiim.wiim_device.AiohttpNotifyServer") as notify_server:
             notify_server.return_value.async_start_server = AsyncMock()
@@ -243,7 +249,7 @@ class TestWiimDevice:
 
         assert notify_server.call_args.kwargs["source"] == (
             expected_source_ip,
-            expected_port,
+            0,
         )
 
     def test_parse_duration(self, mock_upnp_device, mock_session):
