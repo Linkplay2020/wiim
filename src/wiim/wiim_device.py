@@ -2196,10 +2196,19 @@ class WiimDevice:
             return
 
         try:
+            known_track_info = self._current_track_info
+
             # Call GetPositionInfo directly on the AVTransport service
             position_response = await self.async_set_AVT_cmd(
                 WiimHttpCommand.POSITION_INFO
             )
+
+            if isinstance(position_response, dict):
+                self._apply_polled_track_metadata(
+                    position_response,
+                    known_track_info,
+                )
+
             position_str = position_response.get("RelTime")
             duration_str = position_response.get("TrackDuration")
             if position_str:
