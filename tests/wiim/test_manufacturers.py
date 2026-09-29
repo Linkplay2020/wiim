@@ -1,10 +1,10 @@
 # test_manufacturers.py
 
 from wiim.manufacturers import (
-    get_info_from_project,
     MANUFACTURER_WIIM,
-    MODELS_WIIM_PRO,
     MODELS_GENERIC,
+    MODELS_WIIM_PRO,
+    get_info_from_project,
 )
 
 

@@ -1,5 +1,6 @@
 # test_handler.py
 import logging
+
 from wiim.handler import parse_last_change_event
 
 

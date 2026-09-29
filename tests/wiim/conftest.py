@@ -1,7 +1,9 @@
 # conftest.py
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+
 from wiim.endpoint import WiimApiEndpoint
 
 

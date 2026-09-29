@@ -30,6 +30,10 @@ class ZeroconfListener:
         SDK_LOGGER.info(f"Zeroconf service added/updated: {name}, type: {type}")
         asyncio.create_task(self._async_add_service(zeroconf, type, name))
 
+    def update_service(self, zeroconf: "Zeroconf", type: str, name: str) -> None:
+        """Called when a service is updated."""
+        self.add_service(zeroconf, type, name)
+
     async def _async_add_service(
         self, zeroconf: "Zeroconf", type: str, name: str
     ) -> None:

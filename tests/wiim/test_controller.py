@@ -1,10 +1,12 @@
 # test_controller.py
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+from wiim.consts import MultiroomAttribute, WiimHttpCommand
 from wiim.controller import WiimController
 from wiim.models import WiimGroupRole
 from wiim.wiim_device import WiimDevice
-from wiim.consts import WiimHttpCommand, MultiroomAttribute
 
 
 class TestWiimController:
@@ -97,9 +99,7 @@ class TestWiimController:
             return_value={
                 MultiroomAttribute.NUM_FOLLOWERS: "1",
                 MultiroomAttribute.FOLLOWER_LIST: [
-                    {
-                        MultiroomAttribute.UUID: "66666666777788889999aaaaaaaa"
-                    }
+                    {MultiroomAttribute.UUID: "66666666777788889999aaaaaaaa"}
                 ],
             }
         )

@@ -1,8 +1,10 @@
 # test_endpoint.py
+from unittest.mock import ANY, AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, ANY
+
 from wiim.endpoint import WiimApiEndpoint
-from wiim.exceptions import WiimRequestException, WiimInvalidDataException
+from wiim.exceptions import WiimInvalidDataException, WiimRequestException
 
 
 class TestWiimApiEndpoint:

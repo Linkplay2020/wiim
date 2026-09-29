@@ -1,26 +1,27 @@
 # test_wiim_device.py
 import logging
 from dataclasses import asdict
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from datetime import timedelta
-from unittest.mock import patch, MagicMock, AsyncMock
-from wiim.exceptions import WiimDeviceException
 from async_upnp_client.client import UpnpService
 from async_upnp_client.event_handler import UpnpEventHandler
 from async_upnp_client.exceptions import UpnpConnectionError
-from wiim.wiim_device import WiimDevice
-from wiim.endpoint import WiimApiEndpoint
+
 from wiim.consts import (
+    UPNP_TIMEOUT_TIME,
     DeviceAttribute,
+    InputMode,
     LoopMode,
     PlayerAttribute,
     PlayingStatus,
-    UPNP_TIMEOUT_TIME,
     WiimHttpCommand,
-    InputMode,
 )
+from wiim.endpoint import WiimApiEndpoint
+from wiim.exceptions import WiimDeviceException
 from wiim.models import WiimGroupRole, WiimGroupSnapshot, WiimRepeatMode
+from wiim.wiim_device import WiimDevice
 
 # DIDL-Lite as delivered by both LastChange events and the GetInfoEx action.
 _DIDL_LITE_TRACK = (

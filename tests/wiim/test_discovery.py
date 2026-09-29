@@ -1,14 +1,15 @@
 # test_discovery.py
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from async_upnp_client.exceptions import UpnpConnectionError
-from wiim.exceptions import WiimDeviceException, WiimRequestException
+
 from wiim.discovery import (
     async_create_wiim_device,
     async_probe_wiim_device,
     verify_wiim_device,
 )
+from wiim.exceptions import WiimDeviceException, WiimRequestException
 
 
 @pytest.mark.asyncio
@@ -163,7 +164,9 @@ class TestDiscovery:
         mock_wiim_device_cls.return_value = mock_wiim_device
         mock_client_session_cls.return_value = MagicMock()
 
-        with pytest.raises(WiimDeviceException, match="Failed to initialize WiiM device"):
+        with pytest.raises(
+            WiimDeviceException, match="Failed to initialize WiiM device"
+        ):
             await async_create_wiim_device(
                 "http://192.168.1.10:49152/description.xml",
                 mock_session,

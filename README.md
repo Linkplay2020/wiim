@@ -1,63 +1,141 @@
-[![PyPI package](https://badge.fury.io/py/wiim.svg)](https://pypi.org/project/wiim/)
+[![PyPI version](https://img.shields.io/pypi/v/wiim.svg)](https://pypi.org/project/wiim/)
+[![CI](https://github.com/Linkplay2020/wiim/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/Linkplay2020/wiim/actions/workflows/test.yaml)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/pypi/l/wiim.svg)](https://github.com/Linkplay2020/wiim/blob/main/LICENSE)
+[![PyPI downloads](https://img.shields.io/pypi/dm/wiim.svg)](https://pypistats.org/packages/wiim)
 
+# WiiM Python SDK
 
-# wiim
-A Python-based API interface for controlling and communicating with WiiM audio devices
+`wiim` is an asynchronous Python SDK for discovering, monitoring, and
+controlling WiiM audio devices on a local network.
 
-## ✨ Introduction
+The SDK communicates directly with devices using UPnP eventing and the
+LinkPlay HTTP API. It is intended for Home Assistant integrations, automation
+platforms, and other asyncio-based applications.
 
-**wiim** is a powerful and user-friendly Python library designed to significantly simplify the integration and control of [WiiM](https://wiimhome.com/) smart audio devices. WiiM devices (built on LinkPlay modules) deliver an immersive musical experience throughout your home with their excellent wireless streaming and multiroom audio capabilities. With **wiim**, you can seamlessly manage your WiiM devices directly from your Python applications.
+## Features
 
-Whether you need precise control over music playback, synchronization of multiroom groups, or real-time retrieval of playback metadata, **wiim** provides a clean and unified interface. It's the ideal choice for building smart home automations, custom music players, or any Python application requiring interaction with WiiM devices.
+- Validate and create WiiM devices from UPnP description URLs
+- Discover local devices with the included Zeroconf CLI
+- Control playback, volume, mute, seeking, repeat, and shuffle
+- Select supported audio inputs and outputs
+- Read normalized media metadata, playback state, and device information
+- Subscribe to real-time UPnP state changes with HTTP polling as a fallback
+- Inspect presets, the current queue, and transport capabilities
+- Create, update, and disband multiroom groups
+- Support IPv4 and IPv6 event listeners
+- Expose typed models and exceptions for application integrations
 
-## 🚀 Key Features
+Available features can vary by device model, active input source, and firmware
+version.
 
-✅ **Automatic Device Discovery**  
-Smartly scans and identifies all WiiM devices on your network, making connection effortless.
+## Installation
 
-✅ **Comprehensive Playback Control**  
-Offers all core functionalities including play, pause, stop, skip tracks, volume adjustment, mute/unmute, shuffle, repeat modes, and input source switching.
-
-✅ **Rich Metadata Retrieval**  
-Get real-time detailed information about the currently playing track, such as title, artist, album, album art URL, and more, helping you create personalized display interfaces.
-
-✅ **Flexible Group Management**  
-Easily create, update, or disband multiroom synchronized playback groups for seamless music across your entire home.
-
-✅ **High Availability & Stability**  
-Built-in error handling and device status monitoring mechanisms ensure your control commands are reliably delivered.
-
-## 💡 Quick Start
-
-### Installation
-
-Install the **wiim** library easily via pip:
+Install the latest release from PyPI:
 
 ```bash
-pip install wiim
+python -m pip install wiim
 ```
 
-### Usage Example
+The project is currently tested with Python 3.13.
 
-Here's a quick example demonstrating how to connect to and control a WiiM device to play music:
+## Quick Start
+
+Create a device from its UPnP description URL and send playback commands:
 
 ```python
-__main__.py
+import asyncio
+
+from aiohttp import ClientSession
+
+from wiim import async_create_wiim_device
+
+
+async def main() -> None:
+    async with ClientSession() as session:
+        device = await async_create_wiim_device(
+            "http://192.168.1.100:49152/description.xml",
+            session,
+            host="192.168.1.100",
+        )
+
+        try:
+            await device.async_set_volume(30)
+            await device.async_play()
+
+            print(f"Device: {device.name}")
+            print(f"State: {device.playing_status}")
+            print(f"Media: {device.current_media}")
+        finally:
+            await device.disconnect()
+
+
+asyncio.run(main())
 ```
 
-**Important Notes for the Example:**
-- Starts Zeroconf discovery using AsyncZeroconf with ZeroconfListener to automatically find _linkplay._tcp.local. services broadcasted by WiiM devices on your network.
-- Waits a configurable duration (e.g., 5 seconds) using asyncio.sleep() to give Zeroconf time to discover devices on the network.
-- Verifies each discovered device by probing common UPnP description URLs like http://<device_ip>/description.xml with verify_wiim_device() to confirm it's a WiiM device.
-- Creates a WiimDevice instance for each verified WiiM device and sets up an HTTP API endpoint using WiimApiEndpoint for controlling the device.
-- Prints detailed information about each verified device including name, UDN, model, IP address, firmware version, playback status, volume, and current track metadata.
-- Cleans up all resources by disconnecting from devices, canceling Zeroconf browsing, and closing aiohttp client sessions after the process completes.
+Replace the example address with the UPnP description URL and IP address of
+your device.
 
+## Device Discovery
 
-## 📄 License
+Run the included CLI to discover WiiM devices advertised through Zeroconf and
+print their current state:
 
-This project is licensed under the MIT License.
+```bash
+python -m wiim
+```
 
-## 📞 Support & Feedback
+Applications that already receive discovery information can use
+`async_create_wiim_device()` with the discovered UPnP location. This avoids
+running a second discovery implementation and lets the application manage the
+device lifecycle explicitly.
 
-If you encounter any issues during use, or have any suggestions and ideas, please feel free to submit them via GitHub Issues or contact our official support email at support@wiimhome.com.
+## Error Handling
+
+All SDK-specific exceptions derive from `WiimException`:
+
+- `WiimRequestException` reports HTTP and network request failures.
+- `WiimDeviceException` reports device and UPnP action failures.
+- `WiimInvalidDataException` reports invalid device responses.
+
+Catch a more specific exception when the application needs different recovery
+behavior for transport failures and invalid data.
+
+```python
+from wiim import WiimException
+
+try:
+    ...
+except WiimException as err:
+    print(f"WiiM request failed: {err}")
+```
+
+## Development
+
+Clone the repository and install tox:
+
+```bash
+python -m pip install tox
+```
+
+Run the test suite in the isolated Python 3.13 environment:
+
+```bash
+python -m tox -e py313
+```
+
+Run all configured test and static-check environments:
+
+```bash
+python -m tox
+```
+
+## License
+
+This project is available under the [MIT License](https://github.com/Linkplay2020/wiim/blob/main/LICENSE).
+
+## Support
+
+Report bugs and request features through
+[GitHub Issues](https://github.com/Linkplay2020/wiim/issues). For product
+support, contact `support@wiimhome.com`.
