@@ -918,10 +918,12 @@ class WiimDevice:
                                 slave_udn_format,
                             )
                             if self._controller is not None:
-                                removed_device = self._controller.get_device(
-                                    slave_udn_format
-                                )
-                                removed_device._clear_playback_state()
+                                # the slave can be a LinkPlay device this controller
+                                # does not manage; its group entry must still go
+                                with suppress(ValueError):
+                                    self._controller.get_device(
+                                        slave_udn_format
+                                    )._clear_playback_state()
                                 self._controller.remove_group_member(
                                     self.udn, slave_udn_format
                                 )
