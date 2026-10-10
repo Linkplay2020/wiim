@@ -18,6 +18,7 @@ from wiim.consts import (
     PlayingStatus,
     WiimHttpCommand,
 )
+from wiim.controller import WiimController
 from wiim.endpoint import WiimApiEndpoint
 from wiim.exceptions import WiimDeviceException
 from wiim.models import WiimGroupRole, WiimGroupSnapshot, WiimRepeatMode
@@ -799,6 +800,39 @@ class TestWiimDevice:
         )
         leader.async_set_volume.assert_not_awaited()
         leader.async_set_mute.assert_not_awaited()
+
+    def test_slave_removed_event_for_unmanaged_device(self, mock_session):
+        """Test a slave removal updates the group when the slave is not managed."""
+        leader = WiimDevice(
+            _build_upnp_device(
+                udn="uuid:FF98F09C-CA7D-8C38-1961-D612FF98F09C",
+                name="Leader WiiM Device",
+            ),
+            mock_session,
+        )
+        controller = WiimController(mock_session)
+        controller._devices[leader.udn] = leader
+        leader.attach_controller(controller)
+
+        def slave_event(action: str) -> str:
+            return (
+                '<Event xmlns="urn:schemas-upnp-org:metadata-1-0/RCS/">'
+                '<InstanceID val="0">'
+                f'<Slave action="{action}" val="FF97F0025A13544A410BC876"/>'
+                "</InstanceID></Event>"
+            )
+
+        leader._async_process_rendering_control_event(slave_event("add"))
+        assert controller.get_group_snapshot(leader.udn).role == WiimGroupRole.LEADER
+
+        leader.general_event_callback = MagicMock()
+        leader._async_process_rendering_control_event(slave_event("rm"))
+        assert controller.get_group_snapshot(leader.udn) == WiimGroupSnapshot(
+            role=WiimGroupRole.STANDALONE,
+            leader_udn=leader.udn,
+            member_udns=(leader.udn,),
+        )
+        leader.general_event_callback.assert_called_once_with(leader)
 
 
 def _device_with_subscribed_services(*subscribed: str) -> WiimDevice:
