@@ -8,7 +8,7 @@ README = Path(__file__).with_name("README.md")
 if __name__ == "__main__":
     setup(
         name="wiim",
-        version="0.2.1",
+        version="0.3.0a1",
         author="Linkplay",
         author_email="tao.jiang@linkplay.com",
         description="A Python-based API interface for controlling and communicating with WiiM audio devices.",

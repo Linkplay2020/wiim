@@ -11,7 +11,7 @@ from datetime import timedelta
 from html import unescape
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 from async_upnp_client.aiohttp import AiohttpNotifyServer
 from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
@@ -49,7 +49,11 @@ from .consts import (
     wiimDeviceType,
 )
 from .endpoint import WiimApiEndpoint
-from .exceptions import WiimDeviceException, WiimRequestException
+from .exceptions import (
+    WiimDeviceException,
+    WiimInvalidDataException,
+    WiimRequestException,
+)
 from .handler import parse_last_change_event
 from .manufacturers import get_info_from_project
 from .models import (
@@ -163,6 +167,8 @@ class WiimDevice:
         self._current_track_duration: int = 0
         self.next_track_uri: str | None = None
         self._output_mode: str | None = None
+        self._input_capabilities: dict[str, str] | None = None
+        self._output_capabilities: dict[str, dict[str, Any]] | None = None
         self.input_mode: InputMode = InputMode.WIFI
         self.slave_action: str | None = None
         self.slave_udn: str | None = None
@@ -438,6 +444,7 @@ class WiimDevice:
                     self.name,
                 )
 
+            await self.async_refresh_audio_capabilities()
             await self.async_update_http_status()
             if self._event_handler_started:
                 await self._fetch_initial_upnp_states()
@@ -763,16 +770,29 @@ class WiimDevice:
                 category = commonevent.get("category")
                 body = commonevent.get("body", {})
 
-                if category == "bluetooth":
+                if category in ("bluetooth", "audiocast"):
                     connected = body.get("connected")
-                    if connected == 1:
+                    if connected in (1, "1"):
                         self._output_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
 
                 elif category == "hardware":
                     output_mode_val = body.get("output_mode")
                     if output_mode_val is not None:
                         try:
-                            if (
+                            if self._output_capabilities is not None:
+                                name = self._match_output_capability(
+                                    {
+                                        **body,
+                                        "mode": output_mode_val,
+                                        **(
+                                            {"devName": body["dev_name"]}
+                                            if "dev_name" in body
+                                            else {}
+                                        ),
+                                    }
+                                )
+                                self._output_mode = name or "Other Out"
+                            elif (
                                 self._udn
                                 and any(key in self._udn for key in AUDIO_AUX_MODE_IDS)
                                 and output_mode_val == "AUDIO_OUTPUT_AUX_MODE"
@@ -1223,6 +1243,88 @@ class WiimDevice:
             )
             raise
 
+    async def async_refresh_audio_capabilities(self) -> None:
+        """Refresh optional device capabilities, retaining cached or legacy defaults."""
+        if self._http_api is None:
+            return
+
+        try:
+            response = await self._http_request(WiimHttpCommand.AUDIO_INPUT_CAPABILITY)
+            inputs = response.get("audioInput")
+            if not isinstance(inputs, list):
+                raise WiimInvalidDataException("Missing audioInput array")
+            known_names: dict[str, str] = {
+                mode.command_name.casefold(): mode.display_name  # type: ignore[attr-defined]
+                for mode in InputMode
+            }
+            input_modes: dict[str, str] = {}
+            for item in inputs:
+                if not isinstance(item, dict):
+                    raise WiimInvalidDataException("Invalid input capability")
+                mode = item.get("mode")
+                if not isinstance(mode, str) or not mode:
+                    raise ValueError("Empty input mode")
+                if mode.casefold() in ("udisk", "usb-in"):
+                    continue
+                name = known_names.get(mode.casefold(), mode)
+                if name in input_modes and input_modes[name] != mode:
+                    raise ValueError("Ambiguous input name")
+                input_modes[name] = mode
+            self._input_capabilities = input_modes
+        except (WiimRequestException, WiimInvalidDataException, ValueError) as err:
+            self.logger.debug(
+                "Device %s: Input capabilities unavailable: %s", self.name, err
+            )
+
+        try:
+            outputs = await self._http_api.json_list_request(
+                WiimHttpCommand.SOUND_CARD_SUPPORT_LIST
+            )
+            output_modes: dict[str, dict[str, Any]] = {}
+            for item in outputs:
+                if not isinstance(item, dict):
+                    raise WiimInvalidDataException("Invalid output capability")
+                card = item.get("soundCard")
+                output_mode = item.get("mode")
+                if (
+                    not isinstance(card, dict)
+                    or not isinstance(output_mode, str)
+                    or not output_mode
+                ):
+                    raise ValueError("Missing output mode or soundCard")
+                output_name = card.get("devName")
+                if not isinstance(output_name, str) or not output_name:
+                    raise ValueError("Missing output name")
+                output = {"mode": output_mode, "devName": output_name}
+                for key, source in (("index", item), ("cardId", card)):
+                    if key in source:
+                        output[key] = source[key]
+                label = output_name
+                if label in output_modes:
+                    label = f"{output_name} ({output.get('cardId', output.get('index', output_mode))})"
+                if label in output_modes:
+                    raise ValueError("Ambiguous output name")
+                output_modes[label] = output
+            self._output_capabilities = output_modes
+        except (WiimRequestException, WiimInvalidDataException, ValueError) as err:
+            self.logger.debug(
+                "Device %s: Output capabilities unavailable: %s", self.name, err
+            )
+
+    def _match_output_capability(self, output: dict[str, Any]) -> str | None:
+        """Match a device output without confusing multiple cards of the same mode."""
+        candidates = [
+            name
+            for name, item in (self._output_capabilities or {}).items()
+            if item["mode"] == output.get("mode")
+            and all(
+                str(item.get(key)) == str(output[key])
+                for key in ("cardId", "index", "devName")
+                if key in output
+            )
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
     async def async_update_http_status(self) -> None:
         """Fetch device and player status via HTTP API."""
         if not self._http_api:
@@ -1502,7 +1604,14 @@ class WiimDevice:
             for mode in InputMode  # type: ignore[attr-defined]
         }
 
-        http_mode_val = DISPLAY_TO_COMMAND[input_mode]
+        command_map = (
+            self._input_capabilities
+            if self._input_capabilities is not None
+            else DISPLAY_TO_COMMAND
+        )
+        http_mode_val = command_map.get(input_mode)
+        if http_mode_val is None:
+            raise WiimDeviceException(f"Unsupported input mode: {input_mode}")
         if http_mode_val and self._http_api:
             try:
                 await self._http_command_ok(WiimHttpCommand.SWITCH_MODE, http_mode_val)
@@ -1538,6 +1647,21 @@ class WiimDevice:
         target_device = self._command_target_device()
         if target_device is not self:
             await target_device.async_set_output_mode(output_mode)
+            return
+
+        if self._output_capabilities is not None:
+            output = self._output_capabilities.get(output_mode)
+            if output is None:
+                raise WiimDeviceException(f"Unsupported output mode: {output_mode}")
+            payload = {**output, "devNameHex": output["devName"].encode("utf-8").hex()}
+            await self._http_command_ok(
+                WiimHttpCommand.SOUND_CARD_OUTPUT_SET,
+                quote(
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    safe="",
+                ),
+            )
+            self._output_mode = output_mode
             return
 
         DISPLAY_TO_COMMAND = {mode.display_name: mode.cmd for mode in AudioOutputHwMode}  # type: ignore[attr-defined]
@@ -1912,6 +2036,8 @@ class WiimDevice:
     def supported_input_modes(self) -> tuple[str, ...]:
         """Return the supported input mode display names for the device."""
         target_device = self._command_target_device()
+        if target_device._input_capabilities is not None:
+            return tuple(target_device._input_capabilities)
         model_name = target_device._supported_model_name()
         if not model_name:
             return ()
@@ -1930,6 +2056,10 @@ class WiimDevice:
     def supported_output_modes(self) -> tuple[str, ...]:
         """Return the supported output mode display names for the device."""
         target_device = self._command_target_device()
+        if target_device._output_capabilities is not None:
+            return tuple(
+                dict.fromkeys((*target_device._output_capabilities, "Other Out"))
+            )
         model_name = target_device._supported_model_name()
         if not model_name:
             return ()
@@ -2124,6 +2254,24 @@ class WiimDevice:
         if state_device is not self:
             return await state_device.get_audio_output_hw_mode()
 
+        if self._output_capabilities is not None:
+            try:
+                output = await self._http_request(
+                    WiimHttpCommand.SOUND_CARD_ACTIVE_MODE
+                )
+                if any(
+                    output.get(key) in (1, "1") for key in ("btSource", "audioCast")
+                ):
+                    self._output_mode = "Other Out"
+                    return self._output_mode
+                name = self._match_output_capability(output)
+                self._output_mode = name or "Other Out"
+                return self._output_mode
+            except (WiimRequestException, WiimInvalidDataException) as err:
+                self.logger.debug(
+                    "Device %s: Active sound card unavailable: %s", self.name, err
+                )
+
         response = await self._http_request(WiimHttpCommand.AUDIO_OUTPUT_HW_MODE)
 
         hardware_output_mode: dict[str, Any] = {}
@@ -2176,7 +2324,13 @@ class WiimDevice:
 
         self._output_mode = self.sound_mode
 
-        return self.sound_mode
+        if (
+            self._output_capabilities is not None
+            and self._output_mode not in self._output_capabilities
+        ):
+            self._output_mode = "Other Out"
+
+        return self._output_mode
 
     async def async_get_current_media(self) -> WiimMediaMetadata | None:
         """Sync device position then return metadata."""

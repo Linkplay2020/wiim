@@ -36,6 +36,10 @@ class WiimHttpCommand(StrEnum):
     TIMESYNC = "timeSync:{}"
     AUDIO_OUTPUT_HW_MODE_SET = "setAudioOutputHardwareMode:{}"
     AUDIO_OUTPUT_HW_MODE = "getNewAudioOutputHardwareMode"
+    AUDIO_INPUT_CAPABILITY = "getAudioInputCapbility"
+    SOUND_CARD_SUPPORT_LIST = "getSoundCardModeSupportList"
+    SOUND_CARD_ACTIVE_MODE = "getActiveSoundCardOutputMode"
+    SOUND_CARD_OUTPUT_SET = "setSoundCardOutputMode:{}"
 
 
 class SpeakerType(StrEnum):
@@ -229,6 +233,7 @@ class InputMode(IntFlag):
     OPTICAL = (8, "Optical In", "optical")
     HDMI = (16, "TV", "HDMI")
     PHONO = (32, "Phono In", "phono")
+    AUX_IN = (64, "Aux In", "auxIn")
 
     def __new__(cls, value: int, display_name: str, command_name: str):
         obj = int.__new__(cls, value)
@@ -248,6 +253,7 @@ class PlayingMode(StrEnum):
     OPTICAL = "43"
     HDMI = "49"
     PHONO = "54"
+    AUX_IN = "60"
 
 
 PLAYING_TO_INPUT_MAP: dict[PlayingMode, InputMode] = {
@@ -257,6 +263,7 @@ PLAYING_TO_INPUT_MAP: dict[PlayingMode, InputMode] = {
     PlayingMode.OPTICAL: InputMode.OPTICAL,
     PlayingMode.HDMI: InputMode.HDMI,
     PlayingMode.PHONO: InputMode.PHONO,
+    PlayingMode.AUX_IN: InputMode.AUX_IN,
 }
 
 SUPPORTED_INPUT_MODES_BY_MODEL = {
@@ -343,6 +350,7 @@ wiimDeviceType = {
 }
 
 PlayMediumToInputMode = {
+    "AUXIN": 64,
     "BLUETOOTH": 2,
     "LINE-IN": 4,
     "OPTICAL": 8,
@@ -360,6 +368,7 @@ VALID_PLAY_MEDIUMS = {
 }
 
 PLAY_MEDIUMS_CTRL = {
+    "AUXIN",
     "RADIO-NETWORK",
     "THIRD-DLNA",
     "LINE-IN",

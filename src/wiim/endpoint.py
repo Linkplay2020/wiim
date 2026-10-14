@@ -103,6 +103,20 @@ class WiimApiEndpoint(WiimBaseEndpoint):
             raise WiimRequestException(f"Timeout for {url}") from asyncio.TimeoutError
 
     async def json_request(self, command: str) -> dict[str, Any]:
+        """Request a JSON object, including legacy key/value responses."""
+        result = await self._json_request(command)
+        if not isinstance(result, dict):
+            raise WiimInvalidDataException("Expected a JSON object", data=str(result))
+        return result
+
+    async def json_list_request(self, command: str) -> list[Any]:
+        """Request a JSON array."""
+        result = await self._json_request(command)
+        if not isinstance(result, list):
+            raise WiimInvalidDataException("Expected a JSON array", data=str(result))
+        return result
+
+    async def _json_request(self, command: str) -> dict[str, Any] | list[Any]:
         """
         Performs a GET request on the given command and returns the result as a JSON object.
         """
