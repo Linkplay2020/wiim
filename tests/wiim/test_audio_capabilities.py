@@ -277,11 +277,18 @@ async def test_output_source_flags_override_hardware(
     audio_api.json_request.assert_awaited_with(WiimHttpCommand.SOUND_CARD_ACTIVE_MODE)
 
 
-@pytest.mark.parametrize("category", ["bluetooth", "audiocast"])
+@pytest.mark.parametrize(
+    "category,event_type,expected",
+    [
+        ("bluetooth", "a2dp_source", "Other Out"),
+        ("bluetooth", "a2dp_sink", "USB & DAC #1"),
+        ("audiocast", "dlna", "Other Out"),
+    ],
+)
 @pytest.mark.parametrize("connected", [1, "1"])
 @pytest.mark.asyncio
-async def test_wireless_output_event_updates_cache_before_callback(
-    audio_device, audio_api, category, connected
+async def test_wireless_event_preserves_output_direction_before_callback(
+    audio_device, audio_api, category, event_type, expected, connected
 ):
     device = audio_device
     await device.async_refresh_audio_capabilities()
@@ -293,14 +300,14 @@ async def test_wireless_output_event_updates_cache_before_callback(
         device.output_mode
     )
     event = json.dumps(
-        {"category": category, "body": {"type": "dlna", "connected": connected}}
+        {"category": category, "body": {"type": event_type, "connected": connected}}
     )
     variable = MagicMock()
     variable.name = "LastChange"
     variable.value = f'<Event><InstanceID val="0"><commonevent val={quoteattr(event)}/></InstanceID></Event>'
     device._internal_handle_rendering_control_event(MagicMock(), [variable])
-    assert device.output_mode == "Other Out"
-    assert observed == ["Other Out"]
+    assert device.output_mode == expected
+    assert observed == [expected]
     audio_api.json_request.assert_not_awaited()
 
 

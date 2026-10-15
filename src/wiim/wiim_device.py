@@ -772,7 +772,9 @@ class WiimDevice:
 
                 if category in ("bluetooth", "audiocast"):
                     connected = body.get("connected")
-                    if connected in (1, "1"):
+                    if connected in (1, "1") and (
+                        category == "audiocast" or body.get("type") == "a2dp_source"
+                    ):
                         self._output_mode = AudioOutputHwMode.OTHER_OUT.display_name  # type: ignore[attr-defined]
 
                 elif category == "hardware":
