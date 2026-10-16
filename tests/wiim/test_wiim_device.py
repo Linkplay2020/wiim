@@ -699,7 +699,7 @@ class TestWiimDevice:
 
         assert follower.playing_status == PlayingStatus.PLAYING
         assert follower.play_mode == "Spotify"
-        assert follower.output_mode == "speaker"
+        assert follower.output_mode is None
         assert follower.loop_state.repeat == WiimRepeatMode.ONE
         assert follower.loop_state.shuffle is True
         assert follower.current_media is not None

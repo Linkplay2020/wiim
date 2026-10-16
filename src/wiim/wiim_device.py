@@ -1646,10 +1646,7 @@ class WiimDevice:
             )
 
     async def async_set_output_mode(self, output_mode: str) -> None:
-        target_device = self._command_target_device()
-        if target_device is not self:
-            await target_device.async_set_output_mode(output_mode)
-            return
+        """Set this device's hardware output independently of its group."""
 
         if self._output_capabilities is not None:
             output = self._output_capabilities.get(output_mode)
@@ -2057,12 +2054,9 @@ class WiimDevice:
     @property
     def supported_output_modes(self) -> tuple[str, ...]:
         """Return the supported output mode display names for the device."""
-        target_device = self._command_target_device()
-        if target_device._output_capabilities is not None:
-            return tuple(
-                dict.fromkeys((*target_device._output_capabilities, "Other Out"))
-            )
-        model_name = target_device._supported_model_name()
+        if self._output_capabilities is not None:
+            return tuple(dict.fromkeys((*self._output_capabilities, "Other Out")))
+        model_name = self._supported_model_name()
         if not model_name:
             return ()
 
@@ -2119,8 +2113,8 @@ class WiimDevice:
 
     @property
     def output_mode(self) -> str | None:
-        """Return grouped audio output mode."""
-        return self._state_source_device()._output_mode
+        """Return this device's hardware output mode."""
+        return self._output_mode
 
     @property
     def loop_mode(self) -> LoopMode:
@@ -2252,9 +2246,7 @@ class WiimDevice:
         self._available = available
 
     async def get_audio_output_hw_mode(self) -> str | None:
-        state_device = self._state_source_device()
-        if state_device is not self:
-            return await state_device.get_audio_output_hw_mode()
+        """Fetch this device's hardware output independently of its group."""
 
         if self._output_capabilities is not None:
             try:

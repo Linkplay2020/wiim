@@ -197,25 +197,64 @@ async def test_failed_output_command_keeps_state(audio_device, audio_api):
 
 
 @pytest.mark.asyncio
-async def test_group_follower_uses_leader_capabilities(
-    audio_device, audio_api, mock_session
+@pytest.mark.parametrize("dynamic", [False, True])
+async def test_group_output_remains_device_local(
+    audio_device, audio_api, mock_session, dynamic
 ):
     leader = audio_device
     await leader.async_refresh_audio_capabilities()
     follower_upnp_device = MagicMock()
     follower_upnp_device.udn = "uuid:follower"
     follower_upnp_device.friendly_name = "Follower"
-    follower = WiimDevice(follower_upnp_device, mock_session)
+    follower_upnp_device.model_name = "WiiM Pro"
+    follower_api = AsyncMock(spec=WiimApiEndpoint)
+    follower = WiimDevice(
+        follower_upnp_device, mock_session, http_api_endpoint=follower_api
+    )
+    if dynamic:
+        follower_api.json_request.return_value = {"audioInput": [{"mode": "wifi"}]}
+        follower_api.json_list_request.return_value = [
+            {
+                "index": 2,
+                "mode": "AUDIO_OUTPUT_SPDIF_MODE",
+                "soundCard": {"cardId": "hw:0,1", "devName": "Optical Out"},
+            }
+        ]
+        await follower.async_refresh_audio_capabilities()
+    follower_outputs = follower.supported_output_modes
     controller = WiimController(mock_session)
     audio_api.json_request.return_value = {"slaves": 0}
+    follower_api.json_request.return_value = {"slaves": 0}
     await controller.add_device(leader)
     await controller.add_device(follower)
     controller.add_group_member(leader.udn, follower.udn)
     assert follower.supported_input_modes == leader.supported_input_modes
-    assert follower.supported_output_modes == leader.supported_output_modes
-    await follower.async_set_output_mode("USB & DAC #1")
-    assert audio_api.request.await_count == 1
-    assert follower.output_mode == "USB & DAC #1"
+    assert follower.supported_output_modes == follower_outputs
+    assert follower.supported_output_modes != leader.supported_output_modes
+    await leader.async_set_output_mode("USB & DAC #1")
+    audio_api.reset_mock()
+    follower_api.reset_mock()
+
+    await follower.async_set_output_mode("Optical Out")
+    follower_api.request.assert_awaited_once()
+    command = follower_api.request.call_args.args[0]
+    if dynamic:
+        payload = json.loads(unquote(command.split(":", 1)[1]))
+        assert payload["devName"] == "Optical Out"
+        follower_api.json_request.return_value = {"mode": "AUDIO_OUTPUT_SPDIF_MODE"}
+    else:
+        assert command == "setAudioOutputHardwareMode:1"
+        follower_api.json_request.return_value = {"hardware": "1", "source": "0"}
+    assert follower.output_mode == "Optical Out"
+    assert await follower.get_audio_output_hw_mode() == "Optical Out"
+    follower_api.json_request.assert_awaited_once_with(
+        WiimHttpCommand.SOUND_CARD_ACTIVE_MODE
+        if dynamic
+        else WiimHttpCommand.AUDIO_OUTPUT_HW_MODE
+    )
+    audio_api.request.assert_not_awaited()
+    audio_api.json_request.assert_not_awaited()
+    assert leader.output_mode == "USB & DAC #1"
 
 
 @pytest.mark.asyncio
