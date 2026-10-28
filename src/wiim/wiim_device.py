@@ -22,6 +22,7 @@ from .consts import (
     _PLAYER_TO_PLAYING,
     AUDIO_AUX_MODE_IDS,
     CMD_TO_MODE_MAP,
+    GEQ_PLUGIN_URI,
     MANUFACTURER_WIIM,
     PLAY_MEDIUMS_CTRL,
     PLAYING_TO_INPUT_MAP,
@@ -36,7 +37,6 @@ from .consts import (
     VALID_PLAY_MEDIUMS,
     AudioOutputHwMode,
     DeviceAttribute,
-    EqualizerMode,
     InputMode,
     LoopMode,
     MuteMode,
@@ -93,6 +93,7 @@ class WiimDevice:
     rendering_control_event_callback: UpnpServiceEventCallback | None = None
     play_queue_event_callback: UpnpServiceEventCallback | None = None
     general_event_callback: GeneralEventCallback | None = None
+    equalizer_event_callback: GeneralEventCallback | None = None
 
     def __init__(
         self,
@@ -162,7 +163,9 @@ class WiimDevice:
         self._play_mode: str = ""
         self.input_source: str
         self._loop_mode: LoopMode = LoopMode.SHUFFLE_DISABLE_REPEAT_NONE
-        self.equalizer_mode: EqualizerMode = EqualizerMode.NONE
+        self.equalizer_mode: str | None = None
+        self._equalizer_modes: tuple[str, ...] = ()
+        self._equalizer_lock = asyncio.Lock()
         self._current_position: int = 0
         self._current_track_duration: int = 0
         self.next_track_uri: str | None = None
@@ -770,7 +773,11 @@ class WiimDevice:
                 category = commonevent.get("category")
                 body = commonevent.get("body", {})
 
-                if category in ("bluetooth", "audiocast"):
+                if category == "equaliser":
+                    if self.equalizer_event_callback:
+                        self.equalizer_event_callback(self)
+
+                elif category in ("bluetooth", "audiocast"):
                     connected = body.get("connected")
                     if connected in (1, "1") and (
                         category == "audiocast" or body.get("type") == "a2dp_source"
@@ -1769,37 +1776,75 @@ class WiimDevice:
             "PlayQueue", "PlayQueueWithIndex", QueueName="CurrentQueue", Index=index
         )
 
-    async def async_set_equalizer_mode(self, eq_mode: EqualizerMode) -> None:
-        """Set equalizer mode using HTTP API."""
-        target_device = self._command_target_device()
-        if target_device is not self:
-            await target_device.async_set_equalizer_mode(eq_mode)
+    @property
+    def supported_equalizer_modes(self) -> tuple[str, ...]:
+        """Return the GEQ presets and custom names reported by this device."""
+        return self._equalizer_modes
+
+    async def async_refresh_equalizer(self) -> None:
+        """Refresh optional GEQ V2 support and the current selection."""
+        if self._http_api is None:
             return
+        payload = quote(json.dumps({"pluginURI": GEQ_PLUGIN_URI}), safe="")
+        try:
+            result = await self._http_api.json_request(
+                WiimHttpCommand.EQUALIZER_LIST.format(payload)
+            )
+            names: dict[str, None] = {}
+            for key in ("preset", "custom"):
+                items = result.get(key)
+                if not isinstance(items, list):
+                    raise WiimInvalidDataException("Missing GEQ preset/custom list")
+                for item in items:
+                    if (
+                        not isinstance(item, dict)
+                        or not isinstance(name := item.get("Name"), str)
+                        or not name
+                    ):
+                        raise WiimInvalidDataException("Invalid GEQ name")
+                    names[name] = None
+            await self.async_get_equalizer_mode()
+            self._equalizer_modes = tuple(names)
+        except WiimInvalidDataException as err:
+            self.logger.debug("Device %s: GEQ refresh unavailable: %s", self.name, err)
 
-        if self._manufacturer == MANUFACTURER_WIIM and self._http_api:
-            try:
-                self.equalizer_mode = eq_mode
-                self._custom_player_properties[PlayerAttribute.EQUALIZER_MODE] = (
-                    eq_mode.value
-                )
-                return
-            except WiimRequestException as e:
-                self.logger.warning(
-                    "Device %s: Failed to set WiiM EQ mode to %s via HTTP: %s",
-                    self.name,
-                    eq_mode.value,
-                    e,
-                )
-                raise
+    async def async_get_equalizer_mode(self) -> str | None:
+        """Read the GEQ selection for this device's current input."""
+        async with self._equalizer_lock:
+            result = await self._http_request(
+                WiimHttpCommand.EQUALIZER_STATE, quote(GEQ_PLUGIN_URI, safe="")
+            )
+            name = result.get("Name")
+            if (
+                str(result.get("status", "")).casefold() != "ok"
+                or not isinstance(name, str)
+                or result.get("EQStat") not in ("On", "Off")
+            ):
+                raise WiimInvalidDataException("Invalid GEQ state")
+            self.equalizer_mode = name if result["EQStat"] == "On" and name else None
+            return self.equalizer_mode
 
-        self.logger.warning(
-            "Device %s: Set equalizer mode %s not supported or HTTP API unavailable.",
-            self.name,
-            eq_mode.value,
+    async def async_set_equalizer_mode(self, eq_mode: str) -> None:
+        """Load a GEQ V2 preset for this device's current input source."""
+        if eq_mode not in self._equalizer_modes:
+            raise WiimDeviceException(f"Unsupported GEQ mode: {eq_mode}")
+        payload = quote(
+            json.dumps(
+                {
+                    "pluginURI": GEQ_PLUGIN_URI,
+                    "Name": eq_mode,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            safe="",
         )
-        raise WiimDeviceException(
-            f"Set equalizer mode {eq_mode.value} not supported or HTTP API unavailable."
-        )
+        async with self._equalizer_lock:
+            result = await self._http_request(WiimHttpCommand.EQUALIZER_LOAD, payload)
+            if str(result.get("status", "")).casefold() != "ok":
+                raise WiimInvalidDataException("GEQ preset load failed")
+            self.equalizer_mode = eq_mode
+            self._custom_player_properties[PlayerAttribute.EQUALIZER_MODE] = eq_mode
 
     async def async_get_favorites(self) -> list:
         """Get Presets from the PlayQueue service (speculative)."""

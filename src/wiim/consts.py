@@ -14,6 +14,7 @@ UPNP_RENDERING_CONTROL_SERVICE_ID = "urn:schemas-upnp-org:service:RenderingContr
 UPNP_WIIM_PLAY_QUEUE_SERVICE_ID = "urn:schemas-wiimu-com:service:PlayQueue:1"
 UPNP_TIMEOUT_TIME = 1800
 AUDIO_AUX_MODE_IDS = ("FF98F359", "FF98FC04")
+GEQ_PLUGIN_URI = "http://moddevices.com/plugins/caps/Eq10HP"
 
 
 class WiimHttpCommand(StrEnum):
@@ -40,6 +41,9 @@ class WiimHttpCommand(StrEnum):
     SOUND_CARD_SUPPORT_LIST = "getSoundCardModeSupportList"
     SOUND_CARD_ACTIVE_MODE = "getActiveSoundCardOutputMode"
     SOUND_CARD_OUTPUT_SET = "setSoundCardOutputMode:{}"
+    EQUALIZER_LIST = "EQv2GetNewList:{}"
+    EQUALIZER_STATE = "EQGetLV2Band:{}"
+    EQUALIZER_LOAD = "EQv2Load:{}"
 
 
 class SpeakerType(StrEnum):
