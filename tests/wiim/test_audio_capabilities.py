@@ -222,13 +222,15 @@ async def test_group_output_remains_device_local(
         ]
         await follower.async_refresh_audio_capabilities()
     follower_outputs = follower.supported_output_modes
+    follower_inputs = follower.supported_input_modes
     controller = WiimController(mock_session)
     audio_api.json_request.return_value = {"slaves": 0}
     follower_api.json_request.return_value = {"slaves": 0}
     await controller.add_device(leader)
     await controller.add_device(follower)
     controller.add_group_member(leader.udn, follower.udn)
-    assert follower.supported_input_modes == leader.supported_input_modes
+    assert follower.supported_input_modes == follower_inputs
+    assert follower.supported_input_modes != leader.supported_input_modes
     assert follower.supported_output_modes == follower_outputs
     assert follower.supported_output_modes != leader.supported_output_modes
     await leader.async_set_output_mode("USB & DAC #1")

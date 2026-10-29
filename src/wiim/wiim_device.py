@@ -1602,12 +1602,7 @@ class WiimDevice:
         return result
 
     async def async_set_play_mode(self, input_mode: str) -> None:
-        """Set the playback source/mode using HTTP API."""
-        target_device = self._command_target_device()
-        if target_device is not self:
-            await target_device.async_set_play_mode(input_mode)
-            return
-
+        """Set this device's input mode using HTTP API."""
         DISPLAY_TO_COMMAND = {
             mode.display_name: mode.command_name  # type: ignore[attr-defined]
             for mode in InputMode  # type: ignore[attr-defined]
@@ -2078,11 +2073,10 @@ class WiimDevice:
 
     @property
     def supported_input_modes(self) -> tuple[str, ...]:
-        """Return the supported input mode display names for the device."""
-        target_device = self._command_target_device()
-        if target_device._input_capabilities is not None:
-            return tuple(target_device._input_capabilities)
-        model_name = target_device._supported_model_name()
+        """Return this device's supported input mode display names."""
+        if self._input_capabilities is not None:
+            return tuple(self._input_capabilities)
+        model_name = self._supported_model_name()
         if not model_name:
             return ()
 
@@ -2155,6 +2149,17 @@ class WiimDevice:
     def play_mode(self) -> str:
         """Return grouped input/play mode."""
         return self._state_source_device()._play_mode
+
+    @property
+    def local_input_mode(self) -> str:
+        """Return this device's input mode, normalized to Network for followers."""
+        if (
+            self._controller is not None
+            and self._controller.get_group_snapshot(self.udn).role
+            == WiimGroupRole.FOLLOWER
+        ):
+            return str(InputMode.WIFI)
+        return self._play_mode
 
     @property
     def output_mode(self) -> str | None:

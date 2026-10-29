@@ -2,7 +2,7 @@
 import logging
 from dataclasses import asdict
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from async_upnp_client.client import UpnpService
@@ -162,6 +162,7 @@ class TestWiimDevice:
         assert not device.is_muted
         assert device.playing_status == PlayingStatus.PLAYING
         assert device.play_mode == InputMode.LINE_IN.display_name
+        assert device.local_input_mode == InputMode.LINE_IN.display_name
         assert device._player_properties[PlayerAttribute.TITLE] == "Test Song"
 
     @pytest.mark.asyncio
@@ -633,7 +634,12 @@ class TestWiimDevice:
             await getattr(device, method_name)()
 
     @pytest.mark.asyncio
-    async def test_follower_reads_grouped_state_from_leader(self, mock_session):
+    @pytest.mark.parametrize(
+        "ungrouped_role", [WiimGroupRole.STANDALONE, WiimGroupRole.LEADER]
+    )
+    async def test_follower_reads_grouped_state_from_leader(
+        self, mock_session, ungrouped_role
+    ):
         """Test grouped follower reads transparently resolve through the leader."""
         leader = WiimDevice(
             _build_upnp_device(
@@ -675,6 +681,7 @@ class TestWiimDevice:
 
         leader._playing_status = PlayingStatus.PLAYING
         leader._play_mode = "Spotify"
+        follower._play_mode = "Network"
         leader._output_mode = "speaker"
         leader._loop_mode = LoopMode.SHUFFLE_ENABLE_REPEAT_ONE
         leader._current_track_info = {
@@ -699,6 +706,11 @@ class TestWiimDevice:
 
         assert follower.playing_status == PlayingStatus.PLAYING
         assert follower.play_mode == "Spotify"
+        assert follower.local_input_mode == "Network"
+        follower._play_mode = "Bluetooth"
+        assert follower.local_input_mode == "Network"
+        assert follower._play_mode == "Bluetooth"
+        assert follower.play_mode == "Spotify"
         assert follower.output_mode is None
         assert follower.loop_state.repeat == WiimRepeatMode.ONE
         assert follower.loop_state.shuffle is True
@@ -707,7 +719,8 @@ class TestWiimDevice:
         assert follower.current_media.album == "Leader Album"
         assert follower.current_media.duration == 215
         assert follower.current_media.position == 42
-        assert follower.supported_input_modes == leader.supported_input_modes
+        assert follower.supported_input_modes == ()
+        assert follower.supported_input_modes != leader.supported_input_modes
         assert follower.supports_http_api is True
 
         capabilities = await follower.async_get_transport_capabilities()
@@ -717,11 +730,19 @@ class TestWiimDevice:
         follower.async_set_AVT_cmd.assert_not_called()
         leader.async_set_AVT_cmd.assert_awaited_once()
 
+        controller.get_group_snapshot.side_effect = None
+        controller.get_group_snapshot.return_value = WiimGroupSnapshot(
+            role=ungrouped_role,
+            leader_udn=follower.udn,
+            member_udns=(follower.udn,),
+        )
+        assert follower.local_input_mode == "Bluetooth"
+
     @pytest.mark.asyncio
-    async def test_follower_forwards_commands_except_volume_and_mute(
+    async def test_follower_forwards_playback_but_keeps_device_settings_local(
         self, mock_session
     ):
-        """Test grouped commands route to the leader except volume and mute."""
+        """Keep input, volume, and mute local while routing playback to the leader."""
         leader = WiimDevice(
             _build_upnp_device(
                 udn="uuid:leader-1234",
@@ -790,13 +811,18 @@ class TestWiimDevice:
         follower.async_seek.assert_awaited_once_with(90)
         leader.async_seek.assert_awaited_once_with(90)
         follower.async_set_play_mode.assert_awaited_once_with("Line In")
-        leader.async_set_play_mode.assert_awaited_once_with("Line In")
+        leader.async_set_play_mode.assert_not_awaited()
+        assert follower.local_input_mode == "Network"
+        assert follower._play_mode == "Line In"
         follower.async_set_loop_mode.assert_awaited_once_with(repeat_all_shuffle)
         leader.async_set_loop_mode.assert_awaited_once_with(repeat_all_shuffle)
         follower.async_set_volume.assert_awaited_once_with(35)
         follower.async_set_mute.assert_awaited_once_with(True)
-        follower._http_command_ok.assert_awaited_once_with(
-            WiimHttpCommand.SET_VOLUME, "35"
+        follower._http_command_ok.assert_has_awaits(
+            [
+                call(WiimHttpCommand.SWITCH_MODE, "line-in"),
+                call(WiimHttpCommand.SET_VOLUME, "35"),
+            ]
         )
         leader.async_set_volume.assert_not_awaited()
         leader.async_set_mute.assert_not_awaited()
